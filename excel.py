@@ -186,7 +186,7 @@ class PDF(FPDF):
         self.set_y(-15)
         self.set_font("Helvetica", "I", 9)
         self.set_text_color(128)
-        self.cell(0, 10, f"Página {self.page_no()}", align="C")
+        self.cell(0, 10, f"{self.page_no()}", align="C")
 
 
 # --- Función para calcular altura real de UNA LÍNEA ---
