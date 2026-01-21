@@ -211,6 +211,16 @@ def calcular_altura_bloque(pdf, lineas_list, ancho_efectivo, alto_linea):
     total_altura += 2  # pequeño margen al final
     return total_altura
 
+def limpiar_nombre_hotel(nombre):
+    """Elimina la palabra 'HOTEL' al inicio y 'S.L.' al final si existen."""
+    nombre_clean = str(nombre).strip()
+    if nombre_clean.upper().startswith('HOTEL'):
+        nombre_clean = nombre_clean[5:].strip()
+    if nombre_clean.upper().endswith('S.L.'):
+        nombre_clean = nombre_clean[:-4].strip()
+    elif nombre_clean.upper().endswith('S.L'):
+        nombre_clean = nombre_clean[:-3].strip()
+    return nombre_clean
 
 # Crear PDF
 pdf = PDF(format=(152.4, 228.6))
@@ -1298,9 +1308,12 @@ for idx, row in df.iterrows():
         current_col = 0
         y_actual = [Y_START] * COLS
 
-    # ---- REGISTRAR HOTEL CON SU PÁGINA ACTUAL ----
-    if hotel_name and hotel_name not in hotel_pages:
-        hotel_pages[hotel_name] = pdf.page_no()
+       # ---- REGISTRAR HOTEL CON SU PÁGINA ACTUAL ----
+    hotel_name = str(row["NOMBRE DE EMPRESA"]).strip()
+    hotel_name_display = limpiar_nombre_hotel(hotel_name)
+    
+    if hotel_name_display and hotel_name_display not in hotel_pages:
+        hotel_pages[hotel_name_display] = pdf.page_no()
 
     # CONSTRUIR TEXTO CON FORMATO (negrita para nombre del hotel)
     # Línea 1: Clasificación + habitaciones
@@ -1308,7 +1321,7 @@ for idx, row in df.iterrows():
         f"{row['CLASIFICACION HOTEL']} · {str(row['NRO. HABITACIONES'])} Habitaciones"
     )
     # Línea 2: Nombre del hotel
-    linea2 = f"{row['NOMBRE DE EMPRESA']}"
+    linea2 = limpiar_nombre_hotel(row['NOMBRE DE EMPRESA'])
     linea3 = f"{row['DIRECCION']}".title()
     linea4 = f"{row['CP']} {row['LOCALIDAD']}".title()
     linea5 = f"Tel: {str(row['TELEFONO1'])}".title()
