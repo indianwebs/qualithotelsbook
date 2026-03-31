@@ -80,6 +80,8 @@ CAPITALES = {
     "TENERIFE": "Santa Cruz de Tenerife",
 }
 df = pd.read_excel(EXCEL_FILE)
+df["CP"] = df["CP"].apply(lambda x: str(int(x)).zfill(5) if not pd.isnull(x) else "")
+df = df.replace("?", "")
 
 
 # Extraer valor numérico de la clasificación para ordenar por estrellas (5->0)
