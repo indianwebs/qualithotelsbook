@@ -24,7 +24,7 @@ def normalizar_provincia(nombre):
 # Diccionario de capitales por provincia (claves normalizadas sin tildes)
 CAPITALES = {
     "ACORUNA": "A Coruña",
-    "ALAVA": "Vitoria",
+    "ARABA": "Vitoria",
     "ALBACETE": "Albacete",
     "ALICANTE": "Alicante",
     "ALMERIA": "Almería",
@@ -84,6 +84,9 @@ CAPITALES = {
 df = pd.read_excel(EXCEL_FILE)
 df["CP"] = df["CP"].apply(lambda x: str(int(x)).zfill(5) if not pd.isnull(x) else "")
 df = df.replace("?", "")
+
+# Renombrar provincias para usar las denominaciones oficiales actuales
+df["PROVINCIA"] = df["PROVINCIA"].replace({"ÁLAVA": "ARABA"})
 
 
 # Extraer valor numérico de la clasificación para ordenar por estrellas (5->0)
@@ -261,6 +264,7 @@ def corregir_preposiciones(texto):
 # CONFIGURACIÓN DE GRID FLEXIBLE
 COLS = 3
 PAGE_WIDTH = 210
+PAGE_HEIGHT = 297
 MARGIN = 10
 COLUMN_WIDTH = (PAGE_WIDTH - 2 * MARGIN) / COLS
 Y_START = 30
@@ -270,6 +274,62 @@ x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
 
 line_height = 4
 ancho_texto = COLUMN_WIDTH - 8
+
+
+# ---------------------------------------------------------------------------
+# FUNCIÓN HELPER: dibujar portada minimalista al estilo "Quadre mèdic"
+# ---------------------------------------------------------------------------
+def dibujar_portada_seccion(pdf, titulo_lineas, page_number_display):
+    """Dibuja una portada de sección con estilo minimalista:
+    - Fondo azul plano (0, 153, 204)
+    - Título blanco centrado en la parte superior-media
+    - Línea blanca horizontal en la parte inferior
+    - Número de página blanco en la esquina inferior derecha
+
+    titulo_lineas: lista de strings (1 o 2 líneas)
+    page_number_display: número a mostrar en la esquina inferior
+    """
+    # Fondo azul completo
+    pdf.set_fill_color(0, 153, 204)
+    pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, "F")
+
+    # Título centrado vertical y horizontalmente en la parte superior-media
+    # Posicionar el título a aproximadamente 1/3 desde arriba (estilo imagen)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 22)
+
+    n_lineas = len(titulo_lineas)
+    altura_linea_titulo = 11
+    bloque_altura = n_lineas * altura_linea_titulo
+    # Centro vertical del título alrededor del 38% de la página
+    y_inicio = (PAGE_HEIGHT * 0.38) - (bloque_altura / 2)
+
+    pdf.set_xy(0, y_inicio)
+    for linea in titulo_lineas:
+        pdf.set_x(0)
+        pdf.cell(PAGE_WIDTH, altura_linea_titulo, linea, align="C", new_x="LMARGIN", new_y="NEXT")
+
+    # Línea blanca horizontal decorativa en la parte inferior
+    pdf.set_draw_color(255, 255, 255)
+    pdf.set_line_width(0.4)
+    y_linea = PAGE_HEIGHT - 25
+    # Línea que NO llega al borde derecho, dejando espacio para el número
+    pdf.line(MARGIN + 5, y_linea, PAGE_WIDTH - 35, y_linea)
+
+    # Número de página en la esquina inferior derecha
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(PAGE_WIDTH - 30, y_linea - 5)
+    pdf.cell(20, 8, str(page_number_display), align="R")
+
+    # Pequeña línea corta a la derecha del número (detalle estilo imagen)
+    pdf.line(PAGE_WIDTH - 8, y_linea, PAGE_WIDTH - MARGIN, y_linea)
+
+    # Resetear colores para páginas siguientes
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(0.2)
+
 
 # Obtener lista única de provincias en orden alfabético (sin tildes)
 provincias_unicas = sorted(df["PROVINCIA"].unique().tolist(), key=normalizar_provincia)
@@ -418,48 +478,14 @@ try:
 except Exception as e:
     print(f"No se pudo cargar Segunda-pagina.jpg: {e}")
 
-# --- PORTADA ÍNDICE DE PROVINCIAS (ahora en el orden correcto) ---
+# --- PORTADA ÍNDICE DE PROVINCIAS (estilo minimalista "Quadre mèdic") ---
 pdf.provincia_actual = None
 pdf.add_page()
-
-# Fondo azul completo
-pdf.set_fill_color(0, 153, 204)
-pdf.rect(0, 0, PAGE_WIDTH, 297, "F")
-
-pdf.set_draw_color(255, 255, 255)
-pdf.set_line_width(0.4)
-pdf.line(20, 55, PAGE_WIDTH - 20, 55)
-pdf.line(20, 242, PAGE_WIDTH - 20, 242)
-pdf.set_line_width(1.2)
-pdf.rect(18, 53, PAGE_WIDTH - 36, 191, "D")
-
-pdf.set_text_color(255, 255, 255)
-pdf.set_font("Helvetica", "B", 28)
-pdf.set_xy(0, 90)
-pdf.cell(PAGE_WIDTH, 14, "ÍNDICE DE PROVINCIAS", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.set_font("Helvetica", "B", 28)
-pdf.set_x(0)
-pdf.cell(PAGE_WIDTH, 14, "Y SUS CAPITALES", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.ln(6)
-pdf.set_draw_color(255, 255, 255)
-pdf.set_line_width(0.5)
-pdf.line(PAGE_WIDTH / 2 - 30, pdf.get_y(), PAGE_WIDTH / 2 + 30, pdf.get_y())
-pdf.ln(8)
-pdf.set_font("Helvetica", "I", 14)
-pdf.set_x(0)
-pdf.cell(PAGE_WIDTH, 8, "Index of Provinces and Their Capitals", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.ln(6)
-pdf.set_font("Helvetica", "", 11)
-pdf.set_x(30)
-pdf.multi_cell(PAGE_WIDTH - 60, 7, "Provincias de España y sus capitales con página de referencia", align="C")
-pdf.set_x(30)
-pdf.multi_cell(PAGE_WIDTH - 60, 7, "Provinces of Spain and their capitals with reference page", align="C")
-pdf.set_font("Helvetica", "B", 13)
-pdf.set_xy(0, 252)
-pdf.cell(PAGE_WIDTH, 8, "ESPAÑA", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.set_text_color(0, 0, 0)
-pdf.set_draw_color(0, 0, 0)
-pdf.set_line_width(0.2)
+dibujar_portada_seccion(
+    pdf,
+    ["Índice de provincias", "y sus capitales"],
+    pdf.page_no(),
+)
 
 # --- PÁGINA DE ÍNDICE DE PROVINCIAS CON PÁGINAS REALES ---
 pdf.provincia_actual = None
@@ -500,7 +526,25 @@ pdf.cell(col_widths_prov[1], row_h_prov, "CAPITALES", border=1, align="C")
 pdf.cell(col_widths_prov[2], row_h_prov, "Pág.", border=1, align="C")
 pdf.set_y(y_header_prov + row_h_prov)
 
-pdf.set_font("Helvetica", "", 10)
+# Helper: imprime una celda ajustando el tamaño de fuente si el texto
+# no cabe en el ancho disponible. Empieza en `font_size_default` y baja
+# hasta `font_size_min` en pasos de 0.5 hasta encontrar uno que quepa
+# (con un pequeño padding interno). Si ni al mínimo cabe, usa el mínimo.
+def cell_ajustada(pdf, w, h, txt, align, font_family="Helvetica", font_style="",
+                  font_size_default=10, font_size_min=7, padding=1.5):
+    txt_safe = txt.encode("latin-1", "ignore").decode("latin-1")
+    ancho_util = w - padding * 2
+    size = font_size_default
+    while size >= font_size_min:
+        pdf.set_font(font_family, font_style, size)
+        if pdf.get_string_width(txt_safe) <= ancho_util:
+            break
+        size -= 0.5
+    pdf.cell(w, h, txt_safe, border=1, align=align)
+    # Restaurar tamaño por defecto para celdas siguientes
+    pdf.set_font(font_family, font_style, font_size_default)
+
+
 for i in range(len(left_items_prov)):
     left_p = left_items_prov[i]
     right_p = right_items_prov[i] if i < len(right_items_prov) else {"provincia": "", "capital": "", "pagina": None}
@@ -511,16 +555,22 @@ for i in range(len(left_items_prov)):
     y_p = pdf.get_y()
     capital_l = left_p["capital"]
     page_l = str(left_p["pagina"]) if left_p["pagina"] is not None else "..."
+
+    # FILA IZQUIERDA
     pdf.set_xy(x_left_prov, y_p)
-    pdf.cell(col_widths_prov[0], row_h_prov, prov_l.encode("latin-1", "ignore").decode("latin-1"), border=1, align="L")
-    pdf.cell(col_widths_prov[1], row_h_prov, capital_l.encode("latin-1", "ignore").decode("latin-1"), border=1, align="L")
-    pdf.cell(col_widths_prov[2], row_h_prov, page_l, border=1, align="C")
+    cell_ajustada(pdf, col_widths_prov[0], row_h_prov, prov_l, "L")
+    cell_ajustada(pdf, col_widths_prov[1], row_h_prov, capital_l, "L")
+    cell_ajustada(pdf, col_widths_prov[2], row_h_prov, page_l, "C")
+
     capital_r = right_p["capital"]
     page_r = str(right_p["pagina"]) if right_p["pagina"] is not None else "..."
+
+    # FILA DERECHA
     pdf.set_xy(x_right_prov, y_p)
-    pdf.cell(col_widths_prov[0], row_h_prov, prov_r.encode("latin-1", "ignore").decode("latin-1"), border=1, align="L")
-    pdf.cell(col_widths_prov[1], row_h_prov, capital_r.encode("latin-1", "ignore").decode("latin-1"), border=1, align="L")
-    pdf.cell(col_widths_prov[2], row_h_prov, page_r, border=1, align="C")
+    cell_ajustada(pdf, col_widths_prov[0], row_h_prov, prov_r, "L")
+    cell_ajustada(pdf, col_widths_prov[1], row_h_prov, capital_r, "L")
+    cell_ajustada(pdf, col_widths_prov[2], row_h_prov, page_r, "C")
+
     pdf.set_y(y_p + row_h_prov)
 
 # --- GENERAR CATÁLOGO ---
@@ -683,74 +733,14 @@ for idx, row in df.iterrows():
     # Actualizar y_actual[current_col] con la nueva posición Y después del hotel
     y_actual[current_col] = pdf.get_y() + 2  # pequeño espaciado entre hoteles
 
-# --- PORTADA ÍNDICE ALFABÉTICO DE HOTELES ---
+# --- PORTADA ÍNDICE ALFABÉTICO DE HOTELES (estilo minimalista) ---
 pdf.provincia_actual = None
 pdf.add_page()
-
-# Fondo azul completo
-pdf.set_fill_color(0, 153, 204)
-pdf.rect(0, 0, PAGE_WIDTH, 297, "F")
-
-# Línea decorativa superior (blanca, fina)
-pdf.set_draw_color(255, 255, 255)
-pdf.set_line_width(0.4)
-pdf.line(20, 55, PAGE_WIDTH - 20, 55)
-
-# Línea decorativa inferior (blanca, fina)
-pdf.line(20, 242, PAGE_WIDTH - 20, 242)
-
-# Rectángulo decorativo central (borde blanco)
-pdf.set_line_width(1.2)
-pdf.rect(18, 53, PAGE_WIDTH - 36, 191, "D")
-
-# Título principal (blanco)
-pdf.set_text_color(255, 255, 255)
-pdf.set_font("Helvetica", "B", 28)
-pdf.set_xy(0, 90)
-pdf.cell(PAGE_WIDTH, 14, "ÍNDICE ALFABÉTICO", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.set_font("Helvetica", "B", 28)
-pdf.set_x(0)
-pdf.cell(PAGE_WIDTH, 14, "DE HOTELES", align="C", new_x="LMARGIN", new_y="NEXT")
-
-# Separador central pequeño
-pdf.ln(6)
-pdf.set_draw_color(255, 255, 255)
-pdf.set_line_width(0.5)
-pdf.line(PAGE_WIDTH / 2 - 30, pdf.get_y(), PAGE_WIDTH / 2 + 30, pdf.get_y())
-pdf.ln(8)
-
-# Subtítulo en inglés
-pdf.set_font("Helvetica", "I", 14)
-pdf.set_x(0)
-pdf.cell(PAGE_WIDTH, 8, "Alphabetical Index of Hotels", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.ln(6)
-
-# Descripción
-pdf.set_font("Helvetica", "", 11)
-pdf.set_x(30)
-pdf.multi_cell(
-    PAGE_WIDTH - 60,
-    7,
-    "Hoteles legalmente autorizados existentes en España",
-    align="C",
+dibujar_portada_seccion(
+    pdf,
+    ["Índice alfabético", "de hoteles"],
+    pdf.page_no(),
 )
-pdf.set_x(30)
-pdf.multi_cell(
-    PAGE_WIDTH - 60,
-    7,
-    "Hotels legally authorized existing in Spain",
-    align="C",
-)
-
-# Año en la parte inferior
-pdf.set_font("Helvetica", "B", 13)
-pdf.set_xy(0, 252)
-pdf.cell(PAGE_WIDTH, 8, "ESPAÑA", align="C", new_x="LMARGIN", new_y="NEXT")
-
-# Resetear colores
-pdf.set_text_color(0, 0, 0)
-pdf.set_draw_color(0, 0, 0)
-pdf.set_line_width(0.2)
 
 # --- INICIAR ÍNDICE ALFABÉTICO DE HOTELES ---
 pdf.provincia_actual = None
@@ -874,74 +864,14 @@ while hotel_idx < len(hoteles_lista):
     y_cols[current_col] += row_height_index
     hotel_idx += 1
 
-# --- PORTADA ÍNDICE ALFABÉTICO DE POBLACIONES ---
+# --- PORTADA ÍNDICE ALFABÉTICO DE POBLACIONES (estilo minimalista) ---
 pdf.provincia_actual = None
 pdf.add_page()
-
-# Fondo azul completo
-pdf.set_fill_color(0, 153, 204)
-pdf.rect(0, 0, PAGE_WIDTH, 297, "F")
-
-# Línea decorativa superior (blanca, fina)
-pdf.set_draw_color(255, 255, 255)
-pdf.set_line_width(0.4)
-pdf.line(20, 55, PAGE_WIDTH - 20, 55)
-
-# Línea decorativa inferior (blanca, fina)
-pdf.line(20, 242, PAGE_WIDTH - 20, 242)
-
-# Rectángulo decorativo central (borde blanco)
-pdf.set_line_width(1.2)
-pdf.rect(18, 53, PAGE_WIDTH - 36, 191, "D")
-
-# Título principal (blanco)
-pdf.set_text_color(255, 255, 255)
-pdf.set_font("Helvetica", "B", 28)
-pdf.set_xy(0, 90)
-pdf.cell(PAGE_WIDTH, 14, "ÍNDICE ALFABÉTICO", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.set_font("Helvetica", "B", 28)
-pdf.set_x(0)
-pdf.cell(PAGE_WIDTH, 14, "DE POBLACIONES", align="C", new_x="LMARGIN", new_y="NEXT")
-
-# Separador central pequeño
-pdf.ln(6)
-pdf.set_draw_color(255, 255, 255)
-pdf.set_line_width(0.5)
-pdf.line(PAGE_WIDTH / 2 - 30, pdf.get_y(), PAGE_WIDTH / 2 + 30, pdf.get_y())
-pdf.ln(8)
-
-# Subtítulo en inglés
-pdf.set_font("Helvetica", "I", 14)
-pdf.set_x(0)
-pdf.cell(PAGE_WIDTH, 8, "Alphabetical Index of Towns", align="C", new_x="LMARGIN", new_y="NEXT")
-pdf.ln(6)
-
-# Descripción
-pdf.set_font("Helvetica", "", 11)
-pdf.set_x(30)
-pdf.multi_cell(
-    PAGE_WIDTH - 60,
-    7,
-    "Poblaciones de España con hoteles legalmente autorizados",
-    align="C",
+dibujar_portada_seccion(
+    pdf,
+    ["Índice alfabético", "de poblaciones"],
+    pdf.page_no(),
 )
-pdf.set_x(30)
-pdf.multi_cell(
-    PAGE_WIDTH - 60,
-    7,
-    "Spanish towns with legally authorized hotels",
-    align="C",
-)
-
-# País en la parte inferior
-pdf.set_font("Helvetica", "B", 13)
-pdf.set_xy(0, 252)
-pdf.cell(PAGE_WIDTH, 8, "ESPAÑA", align="C", new_x="LMARGIN", new_y="NEXT")
-
-# Resetear colores
-pdf.set_text_color(0, 0, 0)
-pdf.set_draw_color(0, 0, 0)
-pdf.set_line_width(0.2)
 
 # --- INICIAR ÍNDICE ALFABÉTICO DE POBLACIONES ---
 pdf.provincia_actual = None
