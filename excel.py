@@ -401,7 +401,8 @@ for idx, row in df.iterrows():
         _partes.append(f"{_hab} Habitaciones")
     linea1_s = " · ".join(_partes)
     linea2_s = limpiar_nombre_hotel(row["NOMBRE DE EMPRESA"])
-    linea3_s = corregir_preposiciones(row["DIRECCION"])
+    _dir_s = str(row["DIRECCION"]).strip()
+    linea3_s = corregir_preposiciones(_dir_s) if _dir_s not in ("", "-", "nan", "NaN", "?") else ""
     linea4_s = corregir_preposiciones(f"{row['CP']} {row['LOCALIDAD']}")
     _tel_s = str(row["TELEFONO1"]).strip()
     linea5_s = f"Tel: {_tel_s}".title() if _tel_s not in ("", "-", "nan", "NaN", "?") else ""
@@ -626,7 +627,8 @@ for idx, row in df.iterrows():
     linea1 = " · ".join(_partes)
     # Línea 2: Nombre del hotel
     linea2 = limpiar_nombre_hotel(row["NOMBRE DE EMPRESA"])
-    linea3 = corregir_preposiciones(row["DIRECCION"])
+    _dir = str(row["DIRECCION"]).strip()
+    linea3 = corregir_preposiciones(_dir) if _dir not in ("", "-", "nan", "NaN", "?") else ""
     linea4 = corregir_preposiciones(f"{row['CP']} {row['LOCALIDAD']}")
     _tel = str(row["TELEFONO1"]).strip()
     _tel_ok = _tel not in ("", "-", "nan", "NaN", "?")
@@ -720,8 +722,9 @@ for idx, row in df.iterrows():
 
     # Líneas 3-6: NORMAL (resetear font siempre, por si linea1 fue omitida)
     pdf.set_font("Helvetica", "", 8)
-    pdf.set_x(x + 2)
-    pdf.multi_cell(ancho_texto, line_height, linea3, border=0, align="L")
+    if linea3:
+        pdf.set_x(x + 2)
+        pdf.multi_cell(ancho_texto, line_height, linea3, border=0, align="L")
     pdf.set_x(x + 2)
     pdf.multi_cell(ancho_texto, line_height, linea4, border=0, align="L")
     if linea5:
