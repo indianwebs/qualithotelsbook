@@ -11,6 +11,10 @@ PDF_FILE = "catalogo_hoteles.pdf"
 # Controla si se incluye la portada (portada.jpg). Poner False para saltarla.
 SHOW_PORTADA = False
 
+# Controla si se incluye la página de presentación (Segunda-pagina.jpg).
+# Poner True para volver a mostrarla; False para que el PDF empiece por el índice.
+SHOW_SEGUNDA_PAGINA = False
+
 
 def normalizar_provincia(nombre):
     """Normaliza provincia para ordenamiento alfabético sin tildes."""
@@ -173,7 +177,7 @@ class PDF(FPDF):
         # Encabezado por provincia
         if getattr(self, "provincia_actual", "") not in [None, "", False]:
             self.set_font("Helvetica", "B", 14)
-            self.set_text_color(0, 153, 204)
+            self.set_text_color(*AZUL_ACENTO)
             # Agregar "(cont)" si esta es una página de continuación
             provincia_text = f"PROVINCIA DE {self.provincia_actual.upper()}"
             if getattr(self, "provincia_continuacion", False):
@@ -275,60 +279,187 @@ x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
 line_height = 4
 ancho_texto = COLUMN_WIDTH - 8
 
+# --- PALETA DE COLOR (tono de las fotos) ---
+AZUL_PORTADA = (70, 120, 160)   # fondo de las portadas azules
+AZUL_ACENTO = (31, 78, 121)     # títulos de provincia / localidad (azul marino)
+
+
+def formatear_clasificacion(val):
+    """Convierte '5 *' → '5*'. El resto (LLAVES, ESPIGAS, CATEGORÍA) se deja igual."""
+    s = str(val).strip()
+    m = re.match(r"^(\d+)\s*\*$", s)
+    if m:
+        return f"{m.group(1)}*"
+    return s
+
+
+def _enc(s):
+    """Codifica a latin-1 (fuentes core de FPDF)."""
+    return str(s).encode("latin-1", "ignore").decode("latin-1")
+
+
+def construir_lineas_hotel(row):
+    """Construye el diccionario de líneas de un hotel con el formato de las fotos.
+
+    Orden de impresión: categoría → NOMBRE (negrita) → registro → dirección →
+    CP+localidad → teléfono → web.
+    """
+    _clasif = str(row["CLASIFICACION HOTEL"]).strip()
+    _hab = str(row["NRO. HABITACIONES"]).strip()
+    _clasif_ok = _clasif not in ("", "-", "nan", "NaN", "?")
+    _hab_ok = _hab not in ("", "-", "nan", "NaN", "?") and _hab.replace(".", "").isdigit()
+
+    partes = []
+    if _clasif_ok:
+        partes.append(formatear_clasificacion(_clasif))
+    if _hab_ok:
+        partes.append(f"{_hab} hab.")
+    # Modalidad: siempre precedida de "hotel" (p.ej. "hotel playa"), como en las fotos
+    _mod = str(row.get("MODALIDAD", "")).strip()
+    _mod_ok = _mod not in ("", "-", "nan", "NaN", "?", "None")
+    if _mod_ok:
+        partes.append(f"Hotel {_mod.lower()}")
+    linea_cat = " - ".join(partes)
+
+    linea_nombre = limpiar_nombre_hotel(row["NOMBRE DE EMPRESA"]).upper()
+
+    _reg = str(row.get("N. REGISTRO", "")).strip()
+    _reg_ok = _reg not in ("", "-", "nan", "NaN", "?", "None")
+    linea_reg = f"Registro oficial: {_reg}" if _reg_ok else ""
+
+    _dir = str(row["DIRECCION"]).strip()
+    linea_dir = corregir_preposiciones(_dir) if _dir not in ("", "-", "nan", "NaN", "?") else ""
+
+    linea_loc = corregir_preposiciones(f"{row['CP']} {row['LOCALIDAD']}")
+
+    _tel = str(row["TELEFONO1"]).strip()
+    linea_tel = f"Tel. {_tel}" if _tel not in ("", "-", "nan", "NaN", "?") else ""
+
+    _web = str(row["SITIO WEB"]).strip()
+    linea_web = f"Web: {_web.lower()}" if _web not in ("", "-", "nan", "NaN", "?") else ""
+
+    return {
+        "cat": _enc(linea_cat),
+        "nombre": _enc(linea_nombre),
+        "reg": _enc(linea_reg),
+        "dir": _enc(linea_dir),
+        "loc": _enc(linea_loc),
+        "tel": _enc(linea_tel),
+        "web": _enc(linea_web),
+    }
+
 
 # ---------------------------------------------------------------------------
-# FUNCIÓN HELPER: dibujar portada minimalista al estilo "Quadre mèdic"
+# PORTADAS AZULES DE SECCIÓN (estilo de las fotos)
 # ---------------------------------------------------------------------------
-def dibujar_portada_seccion(pdf, titulo_lineas, page_number_display):
-    """Dibuja una portada de sección con estilo minimalista:
-    - Fondo azul plano (0, 153, 204)
-    - Título blanco centrado en la parte superior-media
-    - Línea blanca horizontal en la parte inferior
-    - Número de página blanco en la esquina inferior derecha
+def _dibujar_separador(pdf, y):
+    """Separador decorativo blanco: línea — rombo — línea, centrado en `y`."""
+    pdf.set_draw_color(255, 255, 255)
+    pdf.set_fill_color(255, 255, 255)
+    pdf.set_line_width(0.5)
+    cx = PAGE_WIDTH / 2
+    largo = 40   # longitud de cada media línea
+    hueco = 7    # separación entre línea y rombo
+    pdf.line(cx - hueco - largo, y, cx - hueco, y)
+    pdf.line(cx + hueco, y, cx + hueco + largo, y)
+    # Rombo central (4 vértices)
+    s = 2.4
+    pdf.polygon(
+        [(cx, y - s), (cx + s, y), (cx, y + s), (cx - s, y)],
+        style="F",
+    )
 
-    titulo_lineas: lista de strings (1 o 2 líneas)
-    page_number_display: número a mostrar en la esquina inferior
+
+def dibujar_portada_seccion(pdf, lineas_es, lineas_en, page_number_display):
+    """Portada azul de sección, bilingüe, al estilo de las fotos:
+    - Fondo azul plano
+    - Bloque en español (mitad superior) centrado
+    - Separador decorativo (línea — rombo — línea)
+    - Bloque en inglés (mitad inferior) centrado
+    - Número de página blanco arriba a la derecha
     """
     # Fondo azul completo
-    pdf.set_fill_color(0, 153, 204)
+    pdf.set_fill_color(*AZUL_PORTADA)
     pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, "F")
-
-    # Título centrado vertical y horizontalmente en la parte superior-media
-    # Posicionar el título a aproximadamente 1/3 desde arriba (estilo imagen)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 22)
 
-    n_lineas = len(titulo_lineas)
-    altura_linea_titulo = 11
-    bloque_altura = n_lineas * altura_linea_titulo
-    # Centro vertical del título alrededor del 38% de la página
-    y_inicio = (PAGE_HEIGHT * 0.38) - (bloque_altura / 2)
+    # Número de página arriba a la derecha
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_xy(PAGE_WIDTH - 25, 9)
+    pdf.cell(15, 8, str(page_number_display), align="R")
 
-    pdf.set_xy(0, y_inicio)
-    for linea in titulo_lineas:
+    alt = 9.5  # alto de línea de los bloques de texto
+
+    # Bloque español (centrado alrededor del 30% de la página)
+    pdf.set_font("Helvetica", "B", 19)
+    y0 = PAGE_HEIGHT * 0.30 - (len(lineas_es) * alt) / 2
+    pdf.set_xy(0, y0)
+    for linea in lineas_es:
         pdf.set_x(0)
-        pdf.cell(PAGE_WIDTH, altura_linea_titulo, linea, align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(PAGE_WIDTH, alt, _enc(linea), align="C", new_x="LMARGIN", new_y="NEXT")
 
-    # Línea blanca horizontal decorativa en la parte inferior
-    pdf.set_draw_color(255, 255, 255)
-    pdf.set_line_width(0.4)
-    y_linea = PAGE_HEIGHT - 25
-    # Línea que NO llega al borde derecho, dejando espacio para el número
-    pdf.line(MARGIN + 5, y_linea, PAGE_WIDTH - 35, y_linea)
+    # Separador decorativo en el centro vertical
+    _dibujar_separador(pdf, PAGE_HEIGHT * 0.505)
 
-    # Número de página en la esquina inferior derecha
-    pdf.set_font("Helvetica", "B", 11)
+    # Bloque inglés (centrado alrededor del 68% de la página)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_xy(PAGE_WIDTH - 30, y_linea - 5)
-    pdf.cell(20, 8, str(page_number_display), align="R")
+    pdf.set_font("Helvetica", "B", 19)
+    y1 = PAGE_HEIGHT * 0.68 - (len(lineas_en) * alt) / 2
+    pdf.set_xy(0, y1)
+    for linea in lineas_en:
+        pdf.set_x(0)
+        pdf.cell(PAGE_WIDTH, alt, _enc(linea), align="C", new_x="LMARGIN", new_y="NEXT")
 
-    # Pequeña línea corta a la derecha del número (detalle estilo imagen)
-    pdf.line(PAGE_WIDTH - 8, y_linea, PAGE_WIDTH - MARGIN, y_linea)
-
-    # Resetear colores para páginas siguientes
+    # Resetear estilo
     pdf.set_text_color(0, 0, 0)
     pdf.set_draw_color(0, 0, 0)
     pdf.set_line_width(0.2)
+
+
+# --- TEXTOS DE LAS PORTADAS AZULES (exactos de las fotos) ---
+PORTADA_CATALOGO_ES = [
+    "GUIA DE HOTELES DE ESPAÑA",
+    "ORDENADOS POR PROVINCIAS.",
+    "EN CADA PROVINCIA POR ORDEN",
+    "DE CATEGORÍA (ESTRELLAS).",
+    "Y DENTRO DE LA MISMA CATEGORÍA",
+    "DETALLADOS POR ORDEN ALFABÉTICO",
+    "DEL NOMBRE DEL HOTEL",
+]
+PORTADA_CATALOGO_EN = [
+    "A GUIDE TO HOTELS IN SPAIN",
+    "ORGANIZED BY PROVINCES.",
+    "WITHIN EACH PROVINCE, BY CATEGORY",
+    "(STARS). AND WITHIN EACH CATEGORY,",
+    "LISTED IN ALPHABETICAL ORDER",
+    "BY HOTEL NAME",
+]
+PORTADA_HOTELES_ES = [
+    "NOMBRE DE LOS HOTELES",
+    "DE ESTA GUÍA, POR ORDEN",
+    "ALFABÉTICO Y NÚMERO DE",
+    "LA PÁGINA DONDE SE",
+    "ENCUENTRAN.",
+]
+PORTADA_HOTELES_EN = [
+    "NAMES OF THE HOTELS",
+    "IN THIS GUIDE, IN ALPHABETICAL",
+    "ORDER AND THE PAGE NUMBER",
+    "WHERE THEY ARE LOCATED.",
+]
+PORTADA_POBLACIONES_ES = [
+    "CIUDADES Y LOCALIDADES",
+    "DE ESPAÑA CON HOTELES, POR",
+    "ORDEN ALFABÉTICO Y NÚMERO",
+    "DE LA PÁGINA DONDE SE",
+    "ENCUENTRAN.",
+]
+PORTADA_POBLACIONES_EN = [
+    "CITIES AND TOWNS OF SPAIN",
+    "WITH HOTELS, IN ALPHABETICAL",
+    "ORDER AND THE PAGE NUMBER",
+    "WHERE THEY ARE LOCATED.",
+]
 
 
 # Obtener lista única de provincias en orden alfabético (sin tildes)
@@ -343,113 +474,178 @@ for prov in provincias_unicas:
     capital = CAPITALES.get(prov_normalizada, "-")
     indice_provincias.append({"provincia": prov, "capital": capital, "pagina": None})
 
-# Las páginas reales de cada provincia se registrarán durante la generación
-# del catálogo (ver más abajo). El diccionario provincia_pagina_real
-# almacenará provincia → número de página real del PDF.
-provincia_pagina_real = {}
-
 # ---------------------------------------------------------------------------
-# ESTRATEGIA DE DOS PASADAS
+# ESTRATEGIA DE DOBLE RENDER (índices 100% exactos)
 # ---------------------------------------------------------------------------
-# El índice de provincias necesita números de página reales del catálogo,
-# pero debe aparecer ANTES del catálogo en el PDF.
-# Solución: hacer una primera pasada simulada del catálogo (sin escribir PDF)
-# para obtener las páginas de cada provincia; luego generar el PDF completo
-# en el orden correcto: portada → índice provincias → catálogo → índices.
+# El índice de provincias necesita los números de página REALES del catálogo,
+# pero debe aparecer ANTES del catálogo en el PDF. En vez de *estimar* las
+# alturas (lo que desincronizaba el índice del PDF real), renderizamos el
+# catálogo DOS VECES con exactamente el mismo código:
+#   Pasada 1 → a un PDF temporal, solo para capturar las páginas reales.
+#   Pasada 2 → al PDF final, ya con los números de página correctos.
+# Como el render es idéntico y va precedido del mismo nº de páginas fijas,
+# la paginación coincide al 100%.
 # ---------------------------------------------------------------------------
 
-# ---- PASADA 1: simular el catálogo para calcular páginas por provincia ----
-# Calculamos cuántas páginas previas habrá (portada + segunda-pagina + portada-índice + índice)
-# La portada del índice de provincias ocupa 1 página y el índice en sí ocupa 1 página (≤50 provs).
-# Total páginas previas al catálogo:
-paginas_fijas_antes = (1 if SHOW_PORTADA else 0) + 1 + 2  # segunda-pagina + portada-índice + índice
 
-sim_current_col = 0
-sim_y_actual = [Y_START] * COLS
-sim_prov_anterior = ""
-sim_loc_anterior = ""
-sim_pagina = paginas_fijas_antes  # página en la que empezaría el catálogo
-sim_provincia_pagina_real = {}
+def render_catalogo(pdf):
+    """Dibuja TODO el catálogo por provincias en `pdf`.
 
-# Necesitamos un PDF temporal solo para medir anchos de texto
-_pdf_medida = PDF()
-_pdf_medida.set_font("Helvetica", "", 9)
-_pdf_medida.provincia_actual = ""
-_pdf_medida.provincia_continuacion = False
+    Devuelve (prov_pages, hotel_pages, loc_pages): la página REAL de la primera
+    aparición de cada provincia, hotel (nombre limpio) y localidad.
+    """
+    prov_pages = {}
+    hotel_pages = {}
+    loc_pages = {}
 
-for idx, row in df.iterrows():
-    provincia = str(row["PROVINCIA"])
-    localidad = str(row["LOCALIDAD"])
+    x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
+    pdf.provincia_actual = ""
+    y_actual = [Y_START] * COLS
+    provincia_anterior = ""
+    localidad_anterior = ""
+    current_col = 0
 
-    if provincia != sim_prov_anterior:
-        sim_prov_anterior = provincia
-        sim_loc_anterior = ""
-        sim_pagina += 1
-        sim_current_col = 0
-        sim_y_actual = [Y_START] * COLS
-        if provincia not in sim_provincia_pagina_real:
-            sim_provincia_pagina_real[provincia] = sim_pagina
+    for idx, row in df.iterrows():
+        provincia = str(row["PROVINCIA"])
+        localidad = str(row["LOCALIDAD"])
+        hotel_name = str(row["NOMBRE DE EMPRESA"]).strip()
 
-    _clasif = str(row["CLASIFICACION HOTEL"]).strip()
-    _hab = str(row["NRO. HABITACIONES"]).strip()
-    _clasif_ok = _clasif not in ("", "-", "nan", "NaN", "?")
-    _hab_ok = _hab not in ("", "-", "nan", "NaN", "?") and _hab.replace(".", "").isdigit()
-    _partes = []
-    if _clasif_ok:
-        _partes.append(_clasif)
-    if _hab_ok:
-        _partes.append(f"{_hab} Habitaciones")
-    linea1_s = " · ".join(_partes)
-    linea2_s = limpiar_nombre_hotel(row["NOMBRE DE EMPRESA"])
-    _dir_s = str(row["DIRECCION"]).strip()
-    linea3_s = corregir_preposiciones(_dir_s) if _dir_s not in ("", "-", "nan", "NaN", "?") else ""
-    linea4_s = corregir_preposiciones(f"{row['CP']} {row['LOCALIDAD']}")
-    _tel_s = str(row["TELEFONO1"]).strip()
-    linea5_s = f"Tel: {_tel_s}".title() if _tel_s not in ("", "-", "nan", "NaN", "?") else ""
-    linea6_s = f"{row['SITIO WEB']}".lower()
+        # CAMBIO DE PROVINCIA → NUEVA PÁGINA Y RESET DE ALTURAS
+        if provincia != provincia_anterior:
+            provincia_anterior = provincia
+            localidad_anterior = ""
+            pdf.provincia_actual = provincia
+            pdf.provincia_continuacion = False
+            pdf.add_page()
+            current_col = 0
+            y_actual = [Y_START] * COLS
+            if provincia not in prov_pages:
+                prov_pages[provincia] = pdf.page_no()
 
-    for _l in [linea1_s, linea2_s, linea3_s, linea4_s, linea5_s, linea6_s]:
-        pass  # encoding no importa para medir
+        hotel_name_display = limpiar_nombre_hotel(hotel_name)
 
-    lineas_s = [linea2_s, linea1_s, linea3_s, linea4_s, linea5_s, linea6_s]
-    altura_hotel_s = calcular_altura_bloque(_pdf_medida, lineas_s, ancho_texto, line_height)
+        _d = construir_lineas_hotel(row)
+        linea_cat = _d["cat"]
+        linea_nombre = _d["nombre"]
+        linea_reg = _d["reg"]
+        linea_dir = _d["dir"]
+        linea_loc = _d["loc"]
+        linea_tel = _d["tel"]
+        linea_web = _d["web"]
+        lineas_hotel = [
+            linea_nombre, linea_cat, linea_reg,
+            linea_dir, linea_loc, linea_tel, linea_web,
+        ]
 
-    hay_cambio_loc_s = localidad != sim_loc_anterior
-    altura_loc_s = 0
-    if hay_cambio_loc_s:
-        altura_loc_s = (
-            calcular_altura_linea(_pdf_medida, localidad.upper(), COLUMN_WIDTH - 4, line_height) + 4
+        # Altura estimada del hotel (solo para decidir salto de columna/página)
+        pdf.set_font("Helvetica", "", 9)
+        altura_hotel = calcular_altura_bloque(
+            pdf, [_l for _l in lineas_hotel if _l], ancho_texto, line_height
         )
 
-    altura_total_s = altura_loc_s + altura_hotel_s + 2
+        hay_cambio_localidad = localidad != localidad_anterior
+        altura_localidad = 0
+        if hay_cambio_localidad:
+            altura_localidad = (
+                calcular_altura_linea(pdf, localidad.upper(), COLUMN_WIDTH - 4, line_height) + 4
+            )
 
-    sim_loc_cont_s = False
-    if sim_y_actual[sim_current_col] + altura_total_s > Y_LIMIT:
-        sim_current_col += 1
-        if sim_current_col >= COLS:
-            if not hay_cambio_loc_s:
-                sim_loc_cont_s = True
-            sim_pagina += 1
-            sim_current_col = 0
-            sim_y_actual = [Y_START] * COLS
+        altura_total_requerida = altura_localidad + altura_hotel + 2
+        localidad_cont = False
 
-    if hay_cambio_loc_s:
-        sim_loc_anterior = localidad
-        extra = calcular_altura_linea(_pdf_medida, localidad.upper(), COLUMN_WIDTH - 4, line_height) + 4 + 1
-        sim_y_actual[sim_current_col] += extra
-    elif sim_loc_cont_s:
-        # El (cont.) se pone en col 0 y eleva el Y inicial de todas las columnas
-        extra = calcular_altura_linea(_pdf_medida, localidad.upper() + " (cont.)", COLUMN_WIDTH - 4, line_height) + 4 + 1
-        for _c in range(COLS):
-            sim_y_actual[_c] = Y_START + extra
+        if y_actual[current_col] + altura_total_requerida > Y_LIMIT:
+            current_col += 1
+            if current_col >= COLS:
+                pdf.provincia_continuacion = True
+                if not hay_cambio_localidad:
+                    localidad_cont = True
+                pdf.add_page()
+                current_col = 0
+                y_actual = [Y_START] * COLS
 
-    sim_y_actual[sim_current_col] += altura_hotel_s + 2
+        x = x_positions[current_col]
+        y_pos = y_actual[current_col]
 
-# Actualizar indice_provincias con páginas reales calculadas en la simulación
+        # ---- REGISTRAR HOTEL CON SU PÁGINA REAL (ya resuelto el salto de página) ----
+        if hotel_name_display and hotel_name_display not in hotel_pages:
+            hotel_pages[hotel_name_display] = pdf.page_no()
+
+        # TÍTULO DE LOCALIDAD
+        if hay_cambio_localidad:
+            y_pos = y_pos + 1
+            localidad_anterior = localidad
+            if localidad not in loc_pages:
+                loc_pages[localidad] = pdf.page_no()
+            pdf.set_xy(x + 2, y_pos)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(*AZUL_ACENTO)
+            pdf.multi_cell(COLUMN_WIDTH - 4, line_height, localidad.upper(), border=0, align="L")
+            y_pos = pdf.get_y()
+            y_actual[current_col] = y_pos
+        elif localidad_cont:
+            y_pos = y_pos + 1
+            pdf.set_xy(x_positions[0] + 2, y_pos)
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(*AZUL_ACENTO)
+            pdf.multi_cell(COLUMN_WIDTH - 4, line_height, localidad.upper() + " (cont.)", border=0, align="L")
+            cont_y = pdf.get_y()
+            for _c in range(COLS):
+                y_actual[_c] = cont_y
+            y_pos = cont_y
+            x = x_positions[current_col]
+
+        # TEXTO DEL HOTEL
+        pdf.set_xy(x + 2, y_pos)
+        pdf.set_text_color(0, 0, 0)
+        if linea_cat:
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.multi_cell(ancho_texto, line_height, linea_cat, border=0, align="L")
+        pdf.set_x(x + 2)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.multi_cell(ancho_texto, line_height, linea_nombre, border=0, align="L")
+        pdf.set_font("Helvetica", "", 8)
+        if linea_reg:
+            pdf.set_x(x + 2)
+            pdf.multi_cell(ancho_texto, line_height, linea_reg, border=0, align="L")
+        if linea_dir:
+            pdf.set_x(x + 2)
+            pdf.multi_cell(ancho_texto, line_height, linea_dir, border=0, align="L")
+        pdf.set_x(x + 2)
+        pdf.multi_cell(ancho_texto, line_height, linea_loc, border=0, align="L")
+        if linea_tel:
+            pdf.set_x(x + 2)
+            pdf.multi_cell(ancho_texto, line_height, linea_tel, border=0, align="L")
+        if linea_web:
+            pdf.set_x(x + 2)
+            pdf.multi_cell(ancho_texto, line_height, linea_web, border=0, align="L")
+
+        y_actual[current_col] = pdf.get_y() + 2
+
+    return prov_pages, hotel_pages, loc_pages
+
+
+# ---- PASADA 1: render de medición (a un PDF temporal) ----
+# Páginas fijas antes del catálogo: [portada opc.] + [intro opc.] + índice + portada azul.
+paginas_fijas_antes = (
+    (1 if SHOW_PORTADA else 0)
+    + (1 if SHOW_SEGUNDA_PAGINA else 0)
+    + 2  # índice de provincias + portada azul del catálogo
+)
+
+_scratch = PDF()
+_scratch.set_auto_page_break(auto=False)
+_scratch.set_font("Helvetica", "", 9)
+_scratch.provincia_actual = None  # sin cabecera/pie en las páginas fijas dummy
+for _ in range(paginas_fijas_antes):
+    _scratch.add_page()
+prov_pages_real, _hotel_pages_m, _loc_pages_m = render_catalogo(_scratch)
+del _scratch
+
+# Índice de provincias con las páginas REALES
 for item in indice_provincias:
     prov = item["provincia"]
-    if prov in sim_provincia_pagina_real:
-        item["pagina"] = sim_provincia_pagina_real[prov]
+    if prov in prov_pages_real:
+        item["pagina"] = prov_pages_real[prov]
 
 # ---- PASADA 2: generar el PDF completo en orden correcto ----
 
@@ -470,33 +666,36 @@ if SHOW_PORTADA:
     except Exception as e:
         print(f"No se pudo cargar portada.jpg: {e}")
 
-# Añadir segunda página con imagen
-try:
-    pdf.add_page()
-    PAGE_W = pdf.w
-    PAGE_H = pdf.h
-    pdf.image("Segunda-pagina.jpg", x=0, y=0, w=PAGE_W, h=PAGE_H)
-except Exception as e:
-    print(f"No se pudo cargar Segunda-pagina.jpg: {e}")
+# Añadir página de presentación (Segunda-pagina.jpg) solo si está activada
+if SHOW_SEGUNDA_PAGINA:
+    try:
+        pdf.add_page()
+        PAGE_W = pdf.w
+        PAGE_H = pdf.h
+        pdf.image("Segunda-pagina.jpg", x=0, y=0, w=PAGE_W, h=PAGE_H)
+    except Exception as e:
+        print(f"No se pudo cargar Segunda-pagina.jpg: {e}")
 
-# --- PORTADA ÍNDICE DE PROVINCIAS (estilo minimalista "Quadre mèdic") ---
+# --- PÁGINA DE ÍNDICE 1: PROVINCIAS Y SUS CAPITALES ---
 pdf.provincia_actual = None
 pdf.add_page()
-dibujar_portada_seccion(
-    pdf,
-    ["Índice de provincias", "y sus capitales"],
-    pdf.page_no(),
-)
 
-# --- PÁGINA DE ÍNDICE DE PROVINCIAS CON PÁGINAS REALES ---
-pdf.provincia_actual = None
-pdf.add_page()
-pdf.set_font("Helvetica", "B", 16)
+# Número de página arriba a la derecha (estilo foto)
+pdf.set_font("Helvetica", "", 11)
 pdf.set_text_color(0, 0, 0)
-pdf.cell(0, 12, "PROVINCIAS DE ESPAÑA Y SUS CAPITALES", new_x="LMARGIN", new_y="NEXT", align="C")
+pdf.set_xy(PAGE_WIDTH - 25, 10)
+pdf.cell(15, 8, str(pdf.page_no()), align="R")
+
+# Cabecera "ÍNDICE 1  -  INDEX 1"
+pdf.set_xy(0, 12)
+pdf.set_font("Helvetica", "B", 13)
+pdf.cell(PAGE_WIDTH, 8, "ÍNDICE 1     -     INDEX 1", align="C", new_x="LMARGIN", new_y="NEXT")
+pdf.ln(1)
+pdf.set_font("Helvetica", "B", 15)
+pdf.cell(0, 9, "PROVINCIAS DE ESPAÑA Y SUS CAPITALES", new_x="LMARGIN", new_y="NEXT", align="C")
 pdf.set_font("Helvetica", "B", 12)
-pdf.cell(0, 10, "PROVINCES OF SPAIN AND THEIR CAPITALS", new_x="LMARGIN", new_y="NEXT", align="C")
-pdf.ln(8)
+pdf.cell(0, 8, "PROVINCES OF SPAIN AND THEIR CAPITALS", new_x="LMARGIN", new_y="NEXT", align="C")
+pdf.ln(6)
 
 usable_width_prov = PAGE_WIDTH - 2 * MARGIN
 separation_prov = 10
@@ -574,174 +773,26 @@ for i in range(len(left_items_prov)):
 
     pdf.set_y(y_p + row_h_prov)
 
-# --- GENERAR CATÁLOGO ---
-x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
-pdf.provincia_actual = ""
-y_actual = [Y_START] * COLS
+# --- PORTADA AZUL DEL CATÁLOGO (antes de las provincias) ---
+pdf.provincia_actual = None
+pdf.add_page()
+dibujar_portada_seccion(
+    pdf,
+    PORTADA_CATALOGO_ES,
+    PORTADA_CATALOGO_EN,
+    pdf.page_no(),
+)
 
-provincia_anterior = ""
-localidad_anterior = ""
-current_col = 0
-
-# Diccionario para rastrear página de cada hotel (sin duplicados)
-hotel_pages = {}
-
-for idx, row in df.iterrows():
-
-    provincia = str(row["PROVINCIA"])
-    localidad = str(row["LOCALIDAD"])
-    hotel_name = str(row["NOMBRE DE EMPRESA"]).strip()
-
-    # CAMBIO DE PROVINCIA → NUEVA PÁGINA Y RESET DE ALTURAS
-    if provincia != provincia_anterior:
-        provincia_anterior = provincia
-        localidad_anterior = ""
-        pdf.provincia_actual = provincia
-        pdf.provincia_continuacion = False  # Primera página de la provincia
-        pdf.add_page()
-        current_col = 0
-        y_actual = [Y_START] * COLS
-        # Registrar página real de esta provincia
-        if provincia not in provincia_pagina_real:
-            provincia_pagina_real[provincia] = pdf.page_no()
-
-    # ---- REGISTRAR HOTEL CON SU PÁGINA ACTUAL ----
-    hotel_name_display = limpiar_nombre_hotel(hotel_name)
-
-    if hotel_name_display and hotel_name_display not in hotel_pages:
-        hotel_pages[hotel_name_display] = pdf.page_no()
-
-    # CONSTRUIR TEXTO CON FORMATO (negrita para nombre del hotel)
-    # Línea 1: Clasificación + habitaciones (solo si tienen valor real)
-    _clasif = str(row["CLASIFICACION HOTEL"]).strip()
-    _hab = str(row["NRO. HABITACIONES"]).strip()
-
-    _clasif_ok = _clasif not in ("", "-", "nan", "NaN", "?")
-    _hab_ok = _hab not in ("", "-", "nan", "NaN", "?") and _hab.replace(".", "").isdigit()
-
-    _partes = []
-    if _clasif_ok:
-        _partes.append(_clasif)
-    if _hab_ok:
-        _partes.append(f"{_hab} Habitaciones")
-    linea1 = " · ".join(_partes)
-    # Línea 2: Nombre del hotel
-    linea2 = limpiar_nombre_hotel(row["NOMBRE DE EMPRESA"])
-    _dir = str(row["DIRECCION"]).strip()
-    linea3 = corregir_preposiciones(_dir) if _dir not in ("", "-", "nan", "NaN", "?") else ""
-    linea4 = corregir_preposiciones(f"{row['CP']} {row['LOCALIDAD']}")
-    _tel = str(row["TELEFONO1"]).strip()
-    _tel_ok = _tel not in ("", "-", "nan", "NaN", "?")
-    linea5 = f"Tel: {_tel}".title() if _tel_ok else ""
-    linea6 = f"{row['SITIO WEB']}".lower()
-
-    # Convertir a latin-1
-    linea1 = linea1.encode("latin-1", "ignore").decode("latin-1")
-    linea2 = linea2.encode("latin-1", "ignore").decode("latin-1")
-    linea3 = linea3.encode("latin-1", "ignore").decode("latin-1")
-    linea4 = linea4.encode("latin-1", "ignore").decode("latin-1")
-    linea5 = linea5.encode("latin-1", "ignore").decode("latin-1")
-    linea6 = linea6.encode("latin-1", "ignore").decode("latin-1")
-
-    lineas_hotel = [linea2, linea1, linea3, linea4, linea5, linea6]
-
-    # Calcular altura total del hotel
-    altura_hotel = calcular_altura_bloque(pdf, lineas_hotel, ancho_texto, line_height)
-
-    # Detectar si la localidad cambió
-    hay_cambio_localidad = localidad != localidad_anterior
-
-    # Calcular altura de la localidad si es nueva
-    altura_localidad = 0
-    if hay_cambio_localidad:
-        altura_localidad = (
-            calcular_altura_linea(pdf, localidad.upper(), COLUMN_WIDTH - 4, line_height)
-            + 4
-        )
-
-    # VERIFICAR SI CABE EN LA COLUMNA ACTUAL (localidad + hotel)
-    altura_total_requerida = altura_localidad + altura_hotel + 2
-
-    localidad_cont = False  # flag: la localidad continúa en nueva PÁGINA
-
-    if y_actual[current_col] + altura_total_requerida > Y_LIMIT:
-        # NO CABE → pasar a la siguiente columna
-        current_col += 1
-
-        # Si se pasa el número de columnas, nueva página
-        if current_col >= COLS:
-            pdf.provincia_continuacion = True  # Página de continuación de la provincia
-            # Si la localidad no cambió, marcar que continúa en esta nueva página
-            if not hay_cambio_localidad:
-                localidad_cont = True
-            pdf.add_page()
-            current_col = 0
-            y_actual = [Y_START] * COLS
-            # NO resetear localidad_anterior: la localidad solo cambia con provincia
-
-    x = x_positions[current_col]
-    y_pos = y_actual[current_col]
-
-    # IMPRIMIR TÍTULO DE LOCALIDAD (si es nueva, o si es primera columna de página nueva con cont.)
-    if hay_cambio_localidad:
-        y_pos = y_pos + 1
-        localidad_anterior = localidad
-        pdf.set_xy(x + 2, y_pos)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(0, 153, 204)
-        pdf.multi_cell(COLUMN_WIDTH - 4, line_height, localidad.upper(), border=0, align="L")
-        y_pos = pdf.get_y()
-        y_actual[current_col] = y_pos
-    elif localidad_cont:
-        # Solo en col 0 de la nueva página, imprimir "CIUDAD (cont.)"
-        y_pos = y_pos + 1
-        pdf.set_xy(x_positions[0] + 2, y_pos)
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(0, 153, 204)
-        pdf.multi_cell(COLUMN_WIDTH - 4, line_height, localidad.upper() + " (cont.)", border=0, align="L")
-        cont_y = pdf.get_y()
-        # Aplicar esa misma Y de inicio a todas las columnas
-        for _c in range(COLS):
-            y_actual[_c] = cont_y
-        y_pos = cont_y
-        x = x_positions[current_col]
-
-    # IMPRIMIR TEXTO DEL HOTEL CON FORMATO SEPARADO
-    pdf.set_xy(x + 2, y_pos)
-    pdf.set_text_color(0, 0, 0)
-
-    # Línea 1: NEGRITA (nombre del hotel)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.multi_cell(ancho_texto, line_height, linea2, border=0, align="L")
-
-    # Línea 2: NORMAL (clasificación y habitaciones) — solo si hay dato
-    if linea1:
-        pdf.set_x(x + 2)
-        pdf.set_font("Helvetica", "", 8)
-        pdf.multi_cell(ancho_texto, line_height, linea1, border=0, align="L")
-
-    # Líneas 3-6: NORMAL (resetear font siempre, por si linea1 fue omitida)
-    pdf.set_font("Helvetica", "", 8)
-    if linea3:
-        pdf.set_x(x + 2)
-        pdf.multi_cell(ancho_texto, line_height, linea3, border=0, align="L")
-    pdf.set_x(x + 2)
-    pdf.multi_cell(ancho_texto, line_height, linea4, border=0, align="L")
-    if linea5:
-        pdf.set_x(x + 2)
-        pdf.multi_cell(ancho_texto, line_height, linea5, border=0, align="L")
-    pdf.set_x(x + 2)
-    pdf.multi_cell(ancho_texto, line_height, linea6, border=0, align="L")
-
-    # Actualizar y_actual[current_col] con la nueva posición Y después del hotel
-    y_actual[current_col] = pdf.get_y() + 2  # pequeño espaciado entre hoteles
+# --- GENERAR CATÁLOGO (pasada 2, render final; páginas idénticas a la pasada 1) ---
+prov_pages_final, hotel_pages, loc_pages = render_catalogo(pdf)
 
 # --- PORTADA ÍNDICE ALFABÉTICO DE HOTELES (estilo minimalista) ---
 pdf.provincia_actual = None
 pdf.add_page()
 dibujar_portada_seccion(
     pdf,
-    ["Índice alfabético", "de hoteles"],
+    PORTADA_HOTELES_ES,
+    PORTADA_HOTELES_EN,
     pdf.page_no(),
 )
 
@@ -872,7 +923,8 @@ pdf.provincia_actual = None
 pdf.add_page()
 dibujar_portada_seccion(
     pdf,
-    ["Índice alfabético", "de poblaciones"],
+    PORTADA_POBLACIONES_ES,
+    PORTADA_POBLACIONES_EN,
     pdf.page_no(),
 )
 
@@ -899,16 +951,14 @@ pdf.cell(
 )
 pdf.ln(4)
 
-# Construir diccionario de poblaciones → página (primera aparición)
+# Poblaciones → página REAL (capturada durante el render del catálogo).
+# loc_pages usa la localidad tal cual aparece; normalizamos la clave para
+# fusionar variantes por espacios/mayúsculas y quedarnos con la 1ª página.
 poblacion_pages = {}
-for idx, row in df.iterrows():
-    localidad = str(row["LOCALIDAD"]).strip()
-    hotel_name_r = str(row["NOMBRE DE EMPRESA"]).strip()
-    hotel_name_display_r = limpiar_nombre_hotel(hotel_name_r)
-    if localidad and localidad not in poblacion_pages:
-        # Obtener la página del primer hotel de esa localidad
-        if hotel_name_display_r in hotel_pages:
-            poblacion_pages[localidad] = hotel_pages[hotel_name_display_r]
+for _loc, _pg in loc_pages.items():
+    _clave = str(_loc).strip()
+    if _clave and _clave not in poblacion_pages:
+        poblacion_pages[_clave] = _pg
 
 # Lista de poblaciones ordenada alfabéticamente (sin tildes)
 poblaciones_lista = sorted(poblacion_pages.keys(), key=lambda x: normalizar_ciudad(x))
