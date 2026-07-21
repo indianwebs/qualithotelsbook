@@ -177,7 +177,7 @@ class PDF(FPDF):
         # Encabezado por provincia
         if getattr(self, "provincia_actual", "") not in [None, "", False]:
             self.set_font("Helvetica", "B", 14)
-            self.set_text_color(*AZUL_ACENTO)
+            self.set_text_color(*AZUL_PORTADA)
             # Agregar "(cont)" si esta es una página de continuación
             provincia_text = f"PROVINCIA DE {self.provincia_actual.upper()}"
             if getattr(self, "provincia_continuacion", False):
@@ -279,9 +279,9 @@ x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
 line_height = 4
 ancho_texto = COLUMN_WIDTH - 8
 
-# --- PALETA DE COLOR (tono de las fotos) ---
-AZUL_PORTADA = (70, 120, 160)   # fondo de las portadas azules
-AZUL_ACENTO = (31, 78, 121)     # títulos de provincia / localidad (azul marino)
+# --- PALETA DE COLOR (tono de las fotos, ligeramente hacia el cian) ---
+AZUL_PORTADA = (64, 152, 193)   # fondo de las portadas azules
+AZUL_ACENTO = (64, 152, 193)    # todos los azules usan el mismo tono
 
 
 def formatear_clasificacion(val):
