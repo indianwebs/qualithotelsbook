@@ -173,46 +173,68 @@ df = df.sort_values(
 
 # --- PDF ---
 class PDF(FPDF):
+    def __init__(self):
+        # Tamaño de página nativo 6" x 9" (KDP paperback)
+        super().__init__(orientation="P", unit="mm", format=(PAGE_WIDTH, PAGE_HEIGHT))
+        self.set_margins(MARGIN_GUTTER, MARGIN_TOP, MARGIN_OUTER)
+
     def header(self):
+        # Márgenes simétricos: el medianil cambia de lado en cada página
+        izq, der = margenes_pagina(self.page_no())
+        self.set_margins(izq, MARGIN_TOP, der)
+        self.set_xy(izq, MARGIN_TOP)
+
+        if getattr(self, "provincia_actual", "") in [None, "", False]:
+            return
+
         # Encabezado por provincia
-        if getattr(self, "provincia_actual", "") not in [None, "", False]:
-            self.set_font("Helvetica", "B", 14)
-            self.set_text_color(*AZUL_PORTADA)
-            # Agregar "(cont)" si esta es una página de continuación
-            provincia_text = f"PROVINCIA DE {self.provincia_actual.upper()}"
-            if getattr(self, "provincia_continuacion", False):
-                provincia_text += " (cont.)"
-            self.cell(
-                0,
-                8,
-                provincia_text,
-                new_x="LMARGIN", new_y="NEXT",
-                align="C",
-            )
-            self.ln(3)
+        self.set_font("Helvetica", "B", FONT_CABECERA)
+        self.set_text_color(*AZUL_PORTADA)
+        # Agregar "(cont)" si esta es una página de continuación
+        provincia_text = f"PROVINCIA DE {self.provincia_actual.upper()}"
+        if getattr(self, "provincia_continuacion", False):
+            provincia_text += " (cont.)"
+        self.cell(
+            0,
+            5,
+            _enc(provincia_text),
+            new_x="LMARGIN", new_y="NEXT",
+            align="C",
+        )
 
         # Línea superior decorativa
-        if getattr(self, "provincia_actual", "") not in [None, "", False]:
-            self.set_draw_color(180, 180, 180)
-            self.line(10, 20, 200, 20)
-            self.ln(5)
+        self.set_draw_color(180, 180, 180)
+        self.set_line_width(0.2)
+        self.line(izq, Y_LINEA, PAGE_WIDTH - der, Y_LINEA)
+        self.set_text_color(0, 0, 0)
 
     def footer(self):
         if getattr(self, "provincia_actual", "") is None:
             return
-        self.set_y(-15)
-        self.set_font("Helvetica", "I", 9)
+        # Las portadas azules llevan su propio número (blanco, dentro del panel)
+        if self.page_no() in getattr(self, "paginas_sin_pie", set()):
+            return
+        izq = x_contenido(self.page_no())
+        self.set_xy(izq, Y_PIE)
+        self.set_font("Helvetica", "I", 7)
         self.set_text_color(128)
-        self.cell(0, 10, f"{self.page_no()}", align="C")
+        self.cell(0, 4.5, f"{self.page_no()}", align="C")
+        self.set_text_color(0, 0, 0)
 
 
 # --- Función para calcular altura real de UNA LÍNEA ---
+# Factor de seguridad: el ajuste de línea real corta por palabras, así que una
+# línea puede ocupar más alto que el que da la división ancho_texto/ancho_total.
+# Con columnas estrechas (6"x9") esto es crítico para no salirse del margen.
+FACTOR_SEGURIDAD_ANCHO = 0.90
+
+
 def calcular_altura_linea(pdf, texto, ancho_efectivo, alto_linea):
     """Calcula cuántas líneas ocupa un texto dado el ancho disponible."""
     if not texto:
         return 0
     w = pdf.get_string_width(texto)
-    num_lineas = max(1, math.ceil(w / ancho_efectivo))
+    num_lineas = max(1, math.ceil(w / (ancho_efectivo * FACTOR_SEGURIDAD_ANCHO)))
     return num_lineas * alto_linea
 
 
@@ -223,7 +245,7 @@ def calcular_altura_bloque(pdf, lineas_list, ancho_efectivo, alto_linea):
     for linea in lineas_list:
         if linea:
             w = pdf.get_string_width(linea)
-            num_lineas = max(1, math.ceil(w / ancho_efectivo))
+            num_lineas = max(1, math.ceil(w / (ancho_efectivo * FACTOR_SEGURIDAD_ANCHO)))
             total_altura += num_lineas * alto_linea
     total_altura += 2  # pequeño margen al final
     return total_altura
@@ -265,19 +287,73 @@ def corregir_preposiciones(texto):
     return " ".join(resultado)
 
 
+# ---------------------------------------------------------------------------
+# TAMAÑO DE PÁGINA Y MÁRGENES (KDP paperback 6" x 9")
+# ---------------------------------------------------------------------------
+# 6" x 9" = 152.4 x 228.6 mm. El PDF se genera directamente a este tamaño para
+# que KDP NO tenga que reescalarlo (el reescalado de A4 -> 6x9 era lo que
+# dejaba las bandas blancas arriba y abajo).
+#
+# Márgenes exigidos por KDP para un libro de 501-828 páginas:
+#   - Medianil (margen interior, junto al lomo): 0.875" = 22.23 mm
+#   - Margen exterior / superior / inferior:     mínimo 0.25" = 6.35 mm
+# Usamos 0.5" (12.7 mm) en exterior/superior/inferior por seguridad.
+#
+# El medianil alterna de lado: en páginas impares (derechas) el interior es el
+# borde izquierdo; en páginas pares (izquierdas), el derecho.
+# ---------------------------------------------------------------------------
+PAGE_WIDTH = 152.4
+PAGE_HEIGHT = 228.6
+
+MARGIN_GUTTER = 22.23   # medianil (interior, junto al lomo)
+MARGIN_OUTER = 12.7     # margen exterior
+MARGIN_TOP = 12.7
+MARGIN_BOTTOM = 12.7
+
+CONTENT_WIDTH = PAGE_WIDTH - MARGIN_GUTTER - MARGIN_OUTER
+CONTENT_HEIGHT = PAGE_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM
+
+# Compatibilidad con el resto del código (márgenes "simétricos" de referencia)
+MARGIN = MARGIN_OUTER
+
+
+def margenes_pagina(page_no):
+    """Devuelve (margen_izquierdo, margen_derecho) según la paridad de página.
+
+    Impar = página derecha (recto) → el interior es el borde izquierdo.
+    Par   = página izquierda (verso) → el interior es el borde derecho.
+    """
+    if page_no % 2 == 1:
+        return MARGIN_GUTTER, MARGIN_OUTER
+    return MARGIN_OUTER, MARGIN_GUTTER
+
+
+def x_contenido(page_no):
+    """Coordenada X donde empieza el área de texto en esa página."""
+    return margenes_pagina(page_no)[0]
+
+
 # CONFIGURACIÓN DE GRID FLEXIBLE
 COLS = 3
-PAGE_WIDTH = 210
-PAGE_HEIGHT = 297
-MARGIN = 10
-COLUMN_WIDTH = (PAGE_WIDTH - 2 * MARGIN) / COLS
-Y_START = 30
-Y_LIMIT = 280
+COLUMN_WIDTH = CONTENT_WIDTH / COLS
 
-x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
+# Cabecera de provincia + línea decorativa
+Y_LINEA = MARGIN_TOP + 6.5
+Y_START = MARGIN_TOP + 9.5
+# El número de página del pie se imprime justo encima del margen inferior
+Y_PIE = PAGE_HEIGHT - MARGIN_BOTTOM - 4.5
+Y_LIMIT = Y_PIE - 1.0
 
-line_height = 4
-ancho_texto = COLUMN_WIDTH - 8
+# Tipografías del catálogo (ajustadas al ancho real de columna de 6"x9"
+# y a la densidad necesaria para mantener el libro por debajo de 600 páginas)
+FONT_CABECERA = 9.5
+FONT_LOCALIDAD = 6.7
+FONT_NOMBRE = 6.1
+FONT_CAT = 5.5
+FONT_DETALLE = 5.5
+
+line_height = 2.8
+ancho_texto = COLUMN_WIDTH - 3.5
 
 # --- PALETA DE COLOR (tono de las fotos, ligeramente hacia el cian) ---
 AZUL_PORTADA = (64, 152, 193)   # fondo de las portadas azules
@@ -352,63 +428,89 @@ def construir_lineas_hotel(row):
 # ---------------------------------------------------------------------------
 # PORTADAS AZULES DE SECCIÓN (estilo de las fotos)
 # ---------------------------------------------------------------------------
-def _dibujar_separador(pdf, y):
+def _dibujar_separador(pdf, x0, ancho, y):
     """Separador decorativo blanco: línea — rombo — línea, centrado en `y`."""
     pdf.set_draw_color(255, 255, 255)
     pdf.set_fill_color(255, 255, 255)
     pdf.set_line_width(0.5)
-    cx = PAGE_WIDTH / 2
-    largo = 40   # longitud de cada media línea
-    hueco = 7    # separación entre línea y rombo
+    cx = x0 + ancho / 2
+    largo = ancho * 0.28   # longitud de cada media línea
+    hueco = ancho * 0.05   # separación entre línea y rombo
     pdf.line(cx - hueco - largo, y, cx - hueco, y)
     pdf.line(cx + hueco, y, cx + hueco + largo, y)
     # Rombo central (4 vértices)
-    s = 2.4
+    s = 2.0
     pdf.polygon(
         [(cx, y - s), (cx + s, y), (cx, y + s), (cx - s, y)],
         style="F",
     )
 
 
+def _tamano_fuente_ajustado(pdf, lineas, ancho_util, size_max=13, size_min=6):
+    """Mayor tamaño de fuente (Helvetica Bold) con el que TODAS las líneas
+    caben en `ancho_util`."""
+    size = size_max
+    while size > size_min:
+        pdf.set_font("Helvetica", "B", size)
+        if all(pdf.get_string_width(_enc(l)) <= ancho_util for l in lineas):
+            return size
+        size -= 0.5
+    return size_min
+
+
 def dibujar_portada_seccion(pdf, lineas_es, lineas_en, page_number_display):
     """Portada azul de sección, bilingüe, al estilo de las fotos:
-    - Fondo azul plano
+    - Panel azul dentro de los márgenes (KDP no admite fondos a sangre sin
+      configurar bleed, por eso el azul NO llega al borde del papel)
     - Bloque en español (mitad superior) centrado
     - Separador decorativo (línea — rombo — línea)
     - Bloque en inglés (mitad inferior) centrado
     - Número de página blanco arriba a la derecha
     """
-    # Fondo azul completo
+    # El pie se dibuja al cerrar la página, cuando `provincia_actual` puede
+    # haber cambiado ya; marcamos la página para que no lo imprima encima.
+    if not hasattr(pdf, "paginas_sin_pie"):
+        pdf.paginas_sin_pie = set()
+    pdf.paginas_sin_pie.add(pdf.page_no())
+
+    x0 = x_contenido(pdf.page_no())
+    y0 = MARGIN_TOP
+    ancho = CONTENT_WIDTH
+    alto = CONTENT_HEIGHT
+
+    # Panel azul dentro del área imprimible
     pdf.set_fill_color(*AZUL_PORTADA)
-    pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, "F")
+    pdf.rect(x0, y0, ancho, alto, "F")
     pdf.set_text_color(255, 255, 255)
 
-    # Número de página arriba a la derecha
-    pdf.set_font("Helvetica", "", 11)
-    pdf.set_xy(PAGE_WIDTH - 25, 9)
-    pdf.cell(15, 8, str(page_number_display), align="R")
+    # Número de página arriba a la derecha, dentro del panel
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_xy(x0 + ancho - 20, y0 + 4)
+    pdf.cell(15, 6, str(page_number_display), align="R")
 
-    alt = 9.5  # alto de línea de los bloques de texto
+    ancho_util = ancho - 10
+    size = _tamano_fuente_ajustado(pdf, lineas_es + lineas_en, ancho_util)
+    alt = size * 0.62  # alto de línea proporcional al cuerpo
 
-    # Bloque español (centrado alrededor del 30% de la página)
-    pdf.set_font("Helvetica", "B", 19)
-    y0 = PAGE_HEIGHT * 0.30 - (len(lineas_es) * alt) / 2
-    pdf.set_xy(0, y0)
+    # Bloque español (centrado alrededor del 30% del panel)
+    pdf.set_font("Helvetica", "B", size)
+    y_es = y0 + alto * 0.30 - (len(lineas_es) * alt) / 2
+    pdf.set_xy(x0, y_es)
     for linea in lineas_es:
-        pdf.set_x(0)
-        pdf.cell(PAGE_WIDTH, alt, _enc(linea), align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_x(x0)
+        pdf.cell(ancho, alt, _enc(linea), align="C", new_x="LEFT", new_y="NEXT")
 
-    # Separador decorativo en el centro vertical
-    _dibujar_separador(pdf, PAGE_HEIGHT * 0.505)
+    # Separador decorativo en el centro vertical del panel
+    _dibujar_separador(pdf, x0, ancho, y0 + alto * 0.505)
 
-    # Bloque inglés (centrado alrededor del 68% de la página)
+    # Bloque inglés (centrado alrededor del 68% del panel)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", 19)
-    y1 = PAGE_HEIGHT * 0.68 - (len(lineas_en) * alt) / 2
-    pdf.set_xy(0, y1)
+    pdf.set_font("Helvetica", "B", size)
+    y_en = y0 + alto * 0.68 - (len(lineas_en) * alt) / 2
+    pdf.set_xy(x0, y_en)
     for linea in lineas_en:
-        pdf.set_x(0)
-        pdf.cell(PAGE_WIDTH, alt, _enc(linea), align="C", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_x(x0)
+        pdf.cell(ancho, alt, _enc(linea), align="C", new_x="LEFT", new_y="NEXT")
 
     # Resetear estilo
     pdf.set_text_color(0, 0, 0)
@@ -498,7 +600,12 @@ def render_catalogo(pdf):
     hotel_pages = {}
     loc_pages = {}
 
-    x_positions = [MARGIN + i * COLUMN_WIDTH for i in range(COLS)]
+    def columnas(page_no):
+        """Coordenadas X de las 3 columnas en esa página (el medianil alterna)."""
+        base = x_contenido(page_no)
+        return [base + i * COLUMN_WIDTH for i in range(COLS)]
+
+    x_positions = columnas(1)
     pdf.provincia_actual = ""
     y_actual = [Y_START] * COLS
     provincia_anterior = ""
@@ -517,6 +624,7 @@ def render_catalogo(pdf):
             pdf.provincia_actual = provincia
             pdf.provincia_continuacion = False
             pdf.add_page()
+            x_positions = columnas(pdf.page_no())
             current_col = 0
             y_actual = [Y_START] * COLS
             if provincia not in prov_pages:
@@ -538,7 +646,7 @@ def render_catalogo(pdf):
         ]
 
         # Altura estimada del hotel (solo para decidir salto de columna/página)
-        pdf.set_font("Helvetica", "", 9)
+        pdf.set_font("Helvetica", "", FONT_NOMBRE)
         altura_hotel = calcular_altura_bloque(
             pdf, [_l for _l in lineas_hotel if _l], ancho_texto, line_height
         )
@@ -547,7 +655,7 @@ def render_catalogo(pdf):
         altura_localidad = 0
         if hay_cambio_localidad:
             altura_localidad = (
-                calcular_altura_linea(pdf, localidad.upper(), COLUMN_WIDTH - 4, line_height) + 4
+                calcular_altura_linea(pdf, localidad.upper(), COLUMN_WIDTH - 3, line_height) + 4
             )
 
         altura_total_requerida = altura_localidad + altura_hotel + 2
@@ -560,6 +668,7 @@ def render_catalogo(pdf):
                 if not hay_cambio_localidad:
                     localidad_cont = True
                 pdf.add_page()
+                x_positions = columnas(pdf.page_no())
                 current_col = 0
                 y_actual = [Y_START] * COLS
 
@@ -576,18 +685,18 @@ def render_catalogo(pdf):
             localidad_anterior = localidad
             if localidad not in loc_pages:
                 loc_pages[localidad] = pdf.page_no()
-            pdf.set_xy(x + 2, y_pos)
-            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_xy(x + 1.5, y_pos)
+            pdf.set_font("Helvetica", "B", FONT_LOCALIDAD)
             pdf.set_text_color(*AZUL_ACENTO)
-            pdf.multi_cell(COLUMN_WIDTH - 4, line_height, localidad.upper(), border=0, align="L")
+            pdf.multi_cell(COLUMN_WIDTH - 3, line_height, _enc(localidad.upper()), border=0, align="L")
             y_pos = pdf.get_y()
             y_actual[current_col] = y_pos
         elif localidad_cont:
             y_pos = y_pos + 1
-            pdf.set_xy(x_positions[0] + 2, y_pos)
-            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_xy(x_positions[0] + 1.5, y_pos)
+            pdf.set_font("Helvetica", "B", FONT_LOCALIDAD)
             pdf.set_text_color(*AZUL_ACENTO)
-            pdf.multi_cell(COLUMN_WIDTH - 4, line_height, localidad.upper() + " (cont.)", border=0, align="L")
+            pdf.multi_cell(COLUMN_WIDTH - 3, line_height, _enc(localidad.upper() + " (cont.)"), border=0, align="L")
             cont_y = pdf.get_y()
             for _c in range(COLS):
                 y_actual[_c] = cont_y
@@ -595,28 +704,28 @@ def render_catalogo(pdf):
             x = x_positions[current_col]
 
         # TEXTO DEL HOTEL
-        pdf.set_xy(x + 2, y_pos)
+        pdf.set_xy(x + 1.5, y_pos)
         pdf.set_text_color(0, 0, 0)
         if linea_cat:
-            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_font("Helvetica", "B", FONT_CAT)
             pdf.multi_cell(ancho_texto, line_height, linea_cat, border=0, align="L")
-        pdf.set_x(x + 2)
-        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_x(x + 1.5)
+        pdf.set_font("Helvetica", "B", FONT_NOMBRE)
         pdf.multi_cell(ancho_texto, line_height, linea_nombre, border=0, align="L")
-        pdf.set_font("Helvetica", "", 8)
+        pdf.set_font("Helvetica", "", FONT_DETALLE)
         if linea_reg:
-            pdf.set_x(x + 2)
+            pdf.set_x(x + 1.5)
             pdf.multi_cell(ancho_texto, line_height, linea_reg, border=0, align="L")
         if linea_dir:
-            pdf.set_x(x + 2)
+            pdf.set_x(x + 1.5)
             pdf.multi_cell(ancho_texto, line_height, linea_dir, border=0, align="L")
-        pdf.set_x(x + 2)
+        pdf.set_x(x + 1.5)
         pdf.multi_cell(ancho_texto, line_height, linea_loc, border=0, align="L")
         if linea_tel:
-            pdf.set_x(x + 2)
+            pdf.set_x(x + 1.5)
             pdf.multi_cell(ancho_texto, line_height, linea_tel, border=0, align="L")
         if linea_web:
-            pdf.set_x(x + 2)
+            pdf.set_x(x + 1.5)
             pdf.multi_cell(ancho_texto, line_height, linea_web, border=0, align="L")
 
         y_actual[current_col] = pdf.get_y() + 2
@@ -680,30 +789,31 @@ if SHOW_SEGUNDA_PAGINA:
 pdf.provincia_actual = None
 pdf.add_page()
 
+X_IDX = x_contenido(pdf.page_no())
+
 # Número de página arriba a la derecha (estilo foto)
-pdf.set_font("Helvetica", "", 11)
+pdf.set_font("Helvetica", "", 9)
 pdf.set_text_color(0, 0, 0)
-pdf.set_xy(PAGE_WIDTH - 25, 10)
-pdf.cell(15, 8, str(pdf.page_no()), align="R")
+pdf.set_xy(X_IDX + CONTENT_WIDTH - 15, MARGIN_TOP)
+pdf.cell(15, 6, str(pdf.page_no()), align="R")
 
 # Cabecera "ÍNDICE 1  -  INDEX 1"
-pdf.set_xy(0, 12)
-pdf.set_font("Helvetica", "B", 13)
-pdf.cell(PAGE_WIDTH, 8, "ÍNDICE 1     -     INDEX 1", align="C", new_x="LMARGIN", new_y="NEXT")
+pdf.set_xy(X_IDX, MARGIN_TOP + 1)
+pdf.set_font("Helvetica", "B", 10)
+pdf.cell(CONTENT_WIDTH, 6, _enc("ÍNDICE 1     -     INDEX 1"), align="C", new_x="LEFT", new_y="NEXT")
 pdf.ln(1)
-pdf.set_font("Helvetica", "B", 15)
-pdf.cell(0, 9, "PROVINCIAS DE ESPAÑA Y SUS CAPITALES", new_x="LMARGIN", new_y="NEXT", align="C")
-pdf.set_font("Helvetica", "B", 12)
-pdf.cell(0, 8, "PROVINCES OF SPAIN AND THEIR CAPITALS", new_x="LMARGIN", new_y="NEXT", align="C")
-pdf.ln(6)
+pdf.set_font("Helvetica", "B", 11)
+pdf.cell(CONTENT_WIDTH, 6, _enc("PROVINCIAS DE ESPAÑA Y SUS CAPITALES"), new_x="LEFT", new_y="NEXT", align="C")
+pdf.set_font("Helvetica", "B", 9)
+pdf.cell(CONTENT_WIDTH, 5, "PROVINCES OF SPAIN AND THEIR CAPITALS", new_x="LEFT", new_y="NEXT", align="C")
+pdf.ln(3)
 
-usable_width_prov = PAGE_WIDTH - 2 * MARGIN
-separation_prov = 10
+usable_width_prov = CONTENT_WIDTH
+separation_prov = 5
 table_width_prov = (usable_width_prov - separation_prov) / 2
-col_widths_prov = [table_width_prov * 0.40, table_width_prov * 0.45, table_width_prov * 0.15]
-x_left_prov = MARGIN
-x_right_prov = MARGIN + table_width_prov + separation_prov
-row_h_prov = 8
+col_widths_prov = [table_width_prov * 0.41, table_width_prov * 0.45, table_width_prov * 0.14]
+x_left_prov = X_IDX
+x_right_prov = X_IDX + table_width_prov + separation_prov
 
 n_prov = len(indice_provincias)
 mid_prov = (n_prov + 1) // 2
@@ -714,16 +824,17 @@ while len(left_items_prov) < len(right_items_prov):
 while len(right_items_prov) < len(left_items_prov):
     right_items_prov.append({"provincia": "", "capital": "", "pagina": None})
 
-pdf.set_font("Helvetica", "B", 10)
+# Alto de fila calculado para repartir las provincias por toda la página
+_alto_disp_prov = Y_LIMIT - pdf.get_y()
+row_h_prov = min(7.0, _alto_disp_prov / (len(left_items_prov) + 1))
+
+pdf.set_font("Helvetica", "B", 7)
 y_header_prov = pdf.get_y()
-pdf.set_xy(x_left_prov, y_header_prov)
-pdf.cell(col_widths_prov[0], row_h_prov, "PROVINCIAS", border=1, align="C")
-pdf.cell(col_widths_prov[1], row_h_prov, "CAPITALES", border=1, align="C")
-pdf.cell(col_widths_prov[2], row_h_prov, "Pág.", border=1, align="C")
-pdf.set_xy(x_right_prov, y_header_prov)
-pdf.cell(col_widths_prov[0], row_h_prov, "PROVINCIAS", border=1, align="C")
-pdf.cell(col_widths_prov[1], row_h_prov, "CAPITALES", border=1, align="C")
-pdf.cell(col_widths_prov[2], row_h_prov, "Pág.", border=1, align="C")
+for _x_tabla in (x_left_prov, x_right_prov):
+    pdf.set_xy(_x_tabla, y_header_prov)
+    pdf.cell(col_widths_prov[0], row_h_prov, "PROVINCIAS", border=1, align="C")
+    pdf.cell(col_widths_prov[1], row_h_prov, "CAPITALES", border=1, align="C")
+    pdf.cell(col_widths_prov[2], row_h_prov, _enc("Pág."), border=1, align="C")
 pdf.set_y(y_header_prov + row_h_prov)
 
 # Helper: imprime una celda ajustando el tamaño de fuente si el texto
@@ -731,7 +842,7 @@ pdf.set_y(y_header_prov + row_h_prov)
 # hasta `font_size_min` en pasos de 0.5 hasta encontrar uno que quepa
 # (con un pequeño padding interno). Si ni al mínimo cabe, usa el mínimo.
 def cell_ajustada(pdf, w, h, txt, align, font_family="Helvetica", font_style="",
-                  font_size_default=10, font_size_min=7, padding=1.5):
+                  font_size_default=7, font_size_min=4.5, padding=1.0):
     txt_safe = txt.encode("latin-1", "ignore").decode("latin-1")
     ancho_util = w - padding * 2
     size = font_size_default
@@ -800,34 +911,45 @@ dibujar_portada_seccion(
 pdf.provincia_actual = None
 pdf.add_page()
 
+
+# --- Cabecera común de las páginas de índice alfabético ---
+# Los índices finales van muy compactos (4 columnas) para no inflar el
+# número total de páginas del libro.
+FONT_TITULO_INDICE = 7.5
+FONT_INDICE = 5.0
+ROW_H_INDICE = 2.9
+COLS_INDICE = 4
+Y_LIMIT_INDICE = Y_LIMIT
+
+
+def cabecera_indice(pdf, titulo_es, titulo_en):
+    """Imprime los dos títulos bilingües y deja el cursor bajo ellos."""
+    x = x_contenido(pdf.page_no())
+    pdf.set_xy(x, MARGIN_TOP)
+    pdf.set_font("Helvetica", "B", FONT_TITULO_INDICE)
+    pdf.set_text_color(0, 0, 0)
+    pdf.cell(CONTENT_WIDTH, 4.5, _enc(titulo_es), new_x="LEFT", new_y="NEXT", align="C")
+    pdf.cell(CONTENT_WIDTH, 4.5, _enc(titulo_en), new_x="LEFT", new_y="NEXT", align="C")
+    pdf.ln(1.5)
+    return pdf.get_y()
+
+
+TITULO_HOTELES_ES = "Hoteles legalmente autorizados existentes en España, por orden alfabético."
+TITULO_HOTELES_EN = "Hotels legally authorized existing in Spain, in alphabetical order."
+TITULO_POB_ES = "Poblaciones de España con hoteles legalmente autorizados, por orden alfabético."
+TITULO_POB_EN = "Spanish towns with legally authorized hotels, in alphabetical order."
+
 # Títulos (sin línea separadora)
-pdf.set_font("Helvetica", "B", 12)
-pdf.set_text_color(0, 0, 0)
-pdf.cell(
-    0,
-    8,
-    "Hoteles legalmente autorizados existentes en España, por orden alfabético.",
-    new_x="LMARGIN", new_y="NEXT",
-    align="C",
-)
-pdf.cell(
-    0,
-    8,
-    "Hotels legally authorized existing in Spain, in alphabetical order.",
-    new_x="LMARGIN", new_y="NEXT",
-    align="C",
-)
-pdf.ln(4)
+y_start_index = cabecera_indice(pdf, TITULO_HOTELES_ES, TITULO_HOTELES_EN)
 
 # Lista de hoteles ordenada
 hoteles_lista = sorted(hotel_pages.keys(), key=lambda x: x.lower())
 
-# Configuración: 3 columnas verticales
-COLS_INDEX = 3
-col_width_index = (PAGE_WIDTH - 2 * MARGIN) / COLS_INDEX
-row_height_index = 4.5  # Ajustado para tipografía pequeña
-y_start_index = pdf.get_y()
-y_limit_index = 280
+# Configuración: columnas verticales
+COLS_INDEX = COLS_INDICE
+col_width_index = CONTENT_WIDTH / COLS_INDEX
+row_height_index = ROW_H_INDICE  # Ajustado para tipografía pequeña
+y_limit_index = Y_LIMIT_INDICE
 
 
 # ---- FUNCIÓN DE FORMATO (tipografía 6pt equivalente) ----
@@ -836,8 +958,8 @@ def format_index_entry(pdf, name, page, max_width):
     page_str = str(page)
 
     # Reservar espacio para número de página
-    space_reserved = pdf.get_string_width(page_str) + 1.5
-    max_name_width = max_width - space_reserved - 2
+    space_reserved = pdf.get_string_width(page_str) + 1.0
+    max_name_width = max_width - space_reserved - 1.5
 
     # Truncado si hace falta
     while pdf.get_string_width(encoded_name) > max_name_width:
@@ -860,12 +982,18 @@ def format_index_entry(pdf, name, page, max_width):
 
 
 # ---- IMPRIMIR ÍNDICE EN COLUMNAS VERTICALES ----
-pdf.set_font("Helvetica", "", 6.5)
+pdf.set_font("Helvetica", "", FONT_INDICE)
 pdf.set_text_color(0, 0, 0)
 
 pdf.set_y(y_start_index)
 
-x_cols = [MARGIN + i * col_width_index for i in range(COLS_INDEX)]
+
+def columnas_indice(page_no, n_cols, ancho_col):
+    base = x_contenido(page_no)
+    return [base + i * ancho_col for i in range(n_cols)]
+
+
+x_cols = columnas_indice(pdf.page_no(), COLS_INDEX, col_width_index)
 y_cols = [y_start_index] * COLS_INDEX
 
 hotel_idx = 0
@@ -885,35 +1013,21 @@ while hotel_idx < len(hoteles_lista):
         if current_col >= COLS_INDEX:
             # Nueva página
             pdf.add_page()
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(
-                0,
-                8,
-                "Hoteles legalmente autorizados existentes en España, por orden alfabético.",
-                new_x="LMARGIN", new_y="NEXT",
-                align="C",
-            )
-            pdf.cell(
-                0,
-                8,
-                "Hotels legally authorized existing in Spain, in alphabetical order.",
-                new_x="LMARGIN", new_y="NEXT",
-                align="C",
-            )
-            pdf.ln(4)
-            pdf.set_font("Helvetica", "", 6.5)
+            y_nueva = cabecera_indice(pdf, TITULO_HOTELES_ES, TITULO_HOTELES_EN)
+            pdf.set_font("Helvetica", "", FONT_INDICE)
 
             current_col = 0
-            y_cols = [pdf.get_y()] * COLS_INDEX
+            x_cols = columnas_indice(pdf.page_no(), COLS_INDEX, col_width_index)
+            y_cols = [y_nueva] * COLS_INDEX
             page_count += 1
 
     # Imprimir hotel en columna actual
     hotel = hoteles_lista[hotel_idx]
     pagina = hotel_pages[hotel]
-    linea = format_index_entry(pdf, hotel, pagina, col_width_index - 5)
+    linea = format_index_entry(pdf, hotel, pagina, col_width_index - 3)
 
-    pdf.set_xy(x_cols[current_col] + 1.5, y_cols[current_col])
-    pdf.cell(col_width_index - 3, row_height_index, linea, border=0, align="L")
+    pdf.set_xy(x_cols[current_col] + 1.0, y_cols[current_col])
+    pdf.cell(col_width_index - 2, row_height_index, linea, border=0, align="L")
 
     y_cols[current_col] += row_height_index
     hotel_idx += 1
@@ -933,23 +1047,7 @@ pdf.provincia_actual = None
 pdf.add_page()
 
 # Títulos del índice de poblaciones
-pdf.set_font("Helvetica", "B", 12)
-pdf.set_text_color(0, 0, 0)
-pdf.cell(
-    0,
-    8,
-    "Poblaciones de España con hoteles legalmente autorizados, por orden alfabético.",
-    new_x="LMARGIN", new_y="NEXT",
-    align="C",
-)
-pdf.cell(
-    0,
-    8,
-    "Spanish towns with legally authorized hotels, in alphabetical order.",
-    new_x="LMARGIN", new_y="NEXT",
-    align="C",
-)
-pdf.ln(4)
+y_start_pob_inicial = cabecera_indice(pdf, TITULO_POB_ES, TITULO_POB_EN)
 
 # Poblaciones → página REAL (capturada durante el render del catálogo).
 # loc_pages usa la localidad tal cual aparece; normalizamos la clave para
@@ -963,19 +1061,19 @@ for _loc, _pg in loc_pages.items():
 # Lista de poblaciones ordenada alfabéticamente (sin tildes)
 poblaciones_lista = sorted(poblacion_pages.keys(), key=lambda x: normalizar_ciudad(x))
 
-# Configuración: 3 columnas verticales (igual que el índice de hoteles)
-COLS_POB = 3
-col_width_pob = (PAGE_WIDTH - 2 * MARGIN) / COLS_POB
-row_height_pob = 4.5
-y_start_pob = pdf.get_y()
-y_limit_pob = 280
+# Configuración: columnas verticales (igual que el índice de hoteles)
+COLS_POB = COLS_INDICE
+col_width_pob = CONTENT_WIDTH / COLS_POB
+row_height_pob = ROW_H_INDICE
+y_start_pob = y_start_pob_inicial
+y_limit_pob = Y_LIMIT_INDICE
 
 # ---- IMPRIMIR ÍNDICE DE POBLACIONES EN COLUMNAS VERTICALES ----
-pdf.set_font("Helvetica", "", 6.5)
+pdf.set_font("Helvetica", "", FONT_INDICE)
 pdf.set_text_color(0, 0, 0)
 pdf.set_y(y_start_pob)
 
-x_cols_pob = [MARGIN + i * col_width_pob for i in range(COLS_POB)]
+x_cols_pob = columnas_indice(pdf.page_no(), COLS_POB, col_width_pob)
 y_cols_pob = [y_start_pob] * COLS_POB
 
 pob_idx = 0
@@ -990,33 +1088,19 @@ while pob_idx < len(poblaciones_lista):
 
         if current_col_pob >= COLS_POB:
             pdf.add_page()
-            pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(
-                0,
-                8,
-                "Poblaciones de España con hoteles legalmente autorizados, por orden alfabético.",
-                new_x="LMARGIN", new_y="NEXT",
-                align="C",
-            )
-            pdf.cell(
-                0,
-                8,
-                "Spanish towns with legally authorized hotels, in alphabetical order.",
-                new_x="LMARGIN", new_y="NEXT",
-                align="C",
-            )
-            pdf.ln(4)
-            pdf.set_font("Helvetica", "", 6.5)
+            y_nueva_pob = cabecera_indice(pdf, TITULO_POB_ES, TITULO_POB_EN)
+            pdf.set_font("Helvetica", "", FONT_INDICE)
 
             current_col_pob = 0
-            y_cols_pob = [pdf.get_y()] * COLS_POB
+            x_cols_pob = columnas_indice(pdf.page_no(), COLS_POB, col_width_pob)
+            y_cols_pob = [y_nueva_pob] * COLS_POB
 
     poblacion = poblaciones_lista[pob_idx]
     pagina_pob = poblacion_pages[poblacion]
-    linea_pob = format_index_entry(pdf, poblacion, pagina_pob, col_width_pob - 5)
+    linea_pob = format_index_entry(pdf, poblacion, pagina_pob, col_width_pob - 3)
 
-    pdf.set_xy(x_cols_pob[current_col_pob] + 1.5, y_cols_pob[current_col_pob])
-    pdf.cell(col_width_pob - 3, row_height_pob, linea_pob, border=0, align="L")
+    pdf.set_xy(x_cols_pob[current_col_pob] + 1.0, y_cols_pob[current_col_pob])
+    pdf.cell(col_width_pob - 2, row_height_pob, linea_pob, border=0, align="L")
 
     y_cols_pob[current_col_pob] += row_height_pob
     pob_idx += 1
