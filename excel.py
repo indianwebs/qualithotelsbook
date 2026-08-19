@@ -1,4 +1,5 @@
 import math
+import os
 import re
 import unicodedata
 
@@ -171,11 +172,38 @@ df = df.sort_values(
 )
 
 
+# ---------------------------------------------------------------------------
+# FUENTE INCRUSTADA
+# ---------------------------------------------------------------------------
+# fpdf2 usa por defecto Helvetica, que es una de las 14 fuentes "base" del
+# estándar PDF: se nombra en el archivo pero NO se incrusta. KDP exige que
+# todas las fuentes vayan incrustadas y, si no lo están, mete una sustituta
+# por su cuenta y avisa de que "puede haber causado pequeños cambios".
+#
+# Usamos Arial, que es un clon métrico de Helvetica: comprobado sobre las
+# líneas reales del libro, el ancho de cada cadena es IDÉNTICO al bit en los
+# cinco cuerpos que usa el catálogo, así que la paginación no se mueve.
+# Su fsType es 8 (Editable Embedding), o sea que incrustarla está permitido.
+#
+# Si las fuentes no estuvieran disponibles (otro equipo, Linux...), se vuelve
+# a la Helvetica base: el PDF se genera igual, pero KDP volverá a avisar.
+_RUTAS_FUENTE = {
+    "": "C:/Windows/Fonts/arial.ttf",
+    "B": "C:/Windows/Fonts/arialbd.ttf",
+    "I": "C:/Windows/Fonts/ariali.ttf",
+}
+INCRUSTAR_FUENTE = all(os.path.exists(_r) for _r in _RUTAS_FUENTE.values())
+FUENTE = "Arial" if INCRUSTAR_FUENTE else "Helvetica"
+
+
 # --- PDF ---
 class PDF(FPDF):
     def __init__(self):
         # Tamaño de página nativo 6" x 9" (KDP paperback)
         super().__init__(orientation="P", unit="mm", format=(PAGE_WIDTH, PAGE_HEIGHT))
+        if INCRUSTAR_FUENTE:
+            for _estilo, _ruta in _RUTAS_FUENTE.items():
+                self.add_font(FUENTE, _estilo, _ruta)
         self.set_margins(MARGIN_GUTTER, Y_TOP, MARGIN_OUTER + BLEED)
 
     def header(self):
@@ -184,11 +212,17 @@ class PDF(FPDF):
         self.set_margins(izq, Y_TOP, der)
         self.set_xy(izq, Y_TOP)
 
-        if getattr(self, "provincia_actual", "") in [None, "", False]:
+        # fpdf2 dibuja el pie de la página N cuando ya se ha pedido la N+1, y
+        # para entonces `provincia_actual` puede haber cambiado. Decidimos aquí
+        # (al abrir la página) si esta página lleva número, y el pie lo consulta.
+        con_cabecera = getattr(self, "provincia_actual", "") not in [None, "", False]
+        self._pie_visible = con_cabecera
+
+        if not con_cabecera:
             return
 
         # Encabezado por provincia
-        self.set_font("Helvetica", "B", FONT_CABECERA)
+        self.set_font(FUENTE, "B", FONT_CABECERA)
         self.set_text_color(*AZUL_PORTADA)
         # Agregar "(cont)" si esta es una página de continuación
         provincia_text = f"PROVINCIA DE {self.provincia_actual.upper()}"
@@ -209,14 +243,14 @@ class PDF(FPDF):
         self.set_text_color(0, 0, 0)
 
     def footer(self):
-        if getattr(self, "provincia_actual", "") is None:
+        if not getattr(self, "_pie_visible", False):
             return
         # Las portadas azules llevan su propio número (blanco, dentro del panel)
         if self.page_no() in getattr(self, "paginas_sin_pie", set()):
             return
         izq = x_contenido(self.page_no())
         self.set_xy(izq, Y_PIE)
-        self.set_font("Helvetica", "I", 7)
+        self.set_font(FUENTE, "I", 7)
         self.set_text_color(128)
         self.cell(0, 4.5, f"{self.page_no()}", align="C")
         self.set_text_color(0, 0, 0)
@@ -288,42 +322,51 @@ def corregir_preposiciones(texto):
 
 
 # ---------------------------------------------------------------------------
-# TAMAÑO DE PÁGINA Y MÁRGENES (KDP paperback 6" x 9" CON SANGRADO)
+# TAMAÑO DE PÁGINA Y MÁRGENES (KDP paperback 6" x 9" SIN SANGRADO)
 # ---------------------------------------------------------------------------
 # Tamaño final del libro (trim): 6" x 9" = 152.4 x 228.6 mm.
 #
-# Como las portadas azules de sección llevan el fondo hasta el borde del papel,
-# el interior se genera CON SANGRADO (bleed). KDP exige entonces que el PDF
-# mida trim + 0.125" (3.175 mm) por arriba, por abajo y por el borde EXTERIOR
-# (el lado del lomo no lleva sangrado):
-#       155.575 x 234.95 mm  =  6.125" x 9.25"
-# IMPORTANTE: al subirlo hay que marcar la opción "Con sangrado / Bleed".
+# El PDF se genera SIN SANGRADO: la página mide EXACTAMENTE el tamaño de corte
+# (152.4 x 228.6 mm = 6" x 9"), sin ningún milímetro de más. Al subirlo a KDP
+# hay que elegir "Sin sangrado / No bleed" y tamaño de recorte 6 x 9 pulgadas.
+# Así Amazon no reescala nada y la página sale tal cual está diseñada.
 #
-# Márgenes (medidos desde el corte final) exigidos por KDP para 501-828 págs:
-#   - Medianil (margen interior, junto al lomo): 0.875" = 22.23 mm
+# Las portadas azules siguen SIN margen blanco porque el rectángulo azul se
+# pinta cubriendo la página entera (de borde a borde) y además desbordando un
+# poco por fuera; el visor recorta el sobrante.
+#
+# Márgenes (medidos desde el borde de la página) exigidos por KDP:
+#   - Medianil (margen interior, junto al lomo): 0.75" = 19.05 mm (501-700 págs)
 #   - Margen exterior / superior / inferior:     mínimo 0.25" = 6.35 mm
-# Usamos 0.5" (12.7 mm) en exterior/superior/inferior por seguridad.
+# Usamos 19.3 mm de medianil y 12.7 mm (0.5") en exterior/superior/inferior.
 #
 # El medianil alterna de lado: en páginas impares (derechas) el interior es el
-# borde izquierdo; en páginas pares (izquierdas), el derecho. El sangrado va
-# siempre en el borde contrario al lomo.
+# borde izquierdo; en páginas pares (izquierdas), el derecho.
+#
+# Si algún día se quisiera volver al modo con sangrado, basta con poner
+# CON_SANGRADO = True: el resto de la geometría se recalcula sola.
 # ---------------------------------------------------------------------------
 TRIM_WIDTH = 152.4
 TRIM_HEIGHT = 228.6
-BLEED = 3.175           # 0.125"
+
+CON_SANGRADO = True     # False = PDF a tamaño de corte exacto (subir "sin sangrado")
+BLEED = 3.175 if CON_SANGRADO else 0.0
 
 # Tamaño físico del PDF (incluye el sangrado)
 PAGE_WIDTH = TRIM_WIDTH + BLEED
 PAGE_HEIGHT = TRIM_HEIGHT + 2 * BLEED
 
-# Con ~594 páginas KDP exige un medianil mínimo de 0.75" (19.05 mm). Usamos
-# 19.3 mm de interior y 17.1 mm de exterior: es el reparto más simétrico
-# posible sin incumplir ese mínimo, de modo que la mancha se ve prácticamente
+# Márgenes laterales: KDP impone el medianil según el número de páginas y con
+# 501-700 exige 0.75" = 19.05 mm, así que 19.3 es el mínimo legal con holgura.
+# El exterior se mantiene en 17.1 mm para que la mancha quede prácticamente
 # centrada en la página (solo 2.2 mm de diferencia entre ambos lados).
 MARGIN_GUTTER = 19.3    # medianil (interior, junto al lomo)
 MARGIN_OUTER = 17.1     # margen exterior
-MARGIN_TOP = 12.7
-MARGIN_BOTTOM = 12.7
+# Superior e inferior al mínimo práctico para ganar altura de columna: KDP
+# exige 0.25" (6.35 mm) sin sangrado, así que 8 / 7 mm dejan holgura suficiente
+# frente a la tolerancia de la guillotina sin desperdiciar página.
+MARGIN_TOP = 8.0
+MARGIN_BOTTOM = 7.0
 
 CONTENT_WIDTH = TRIM_WIDTH - MARGIN_GUTTER - MARGIN_OUTER
 CONTENT_HEIGHT = TRIM_HEIGHT - MARGIN_TOP - MARGIN_BOTTOM
@@ -370,7 +413,8 @@ PASO_COLUMNA = COLUMN_WIDTH + SEP_COLUMNAS
 # Cabecera de provincia + línea decorativa
 Y_LINEA = Y_TOP + 6.5
 Y_START = Y_TOP + 9.5
-# El número de página del pie se imprime justo encima del margen inferior
+# El pie va pegado abajo: la celda del número apoya justo en el margen
+# inferior, y el texto del catálogo puede bajar hasta 1 mm por encima de ella.
 Y_PIE = Y_BOTTOM - 4.5
 Y_LIMIT = Y_PIE - 1.0
 
@@ -382,13 +426,32 @@ FONT_NOMBRE = 6.1
 FONT_CAT = 5.5
 FONT_DETALLE = 5.5
 
-line_height = 2.8
+line_height = 2.65
+# Separación vertical entre el final de un hotel y el comienzo del siguiente.
+# Bajarla aprovecha el hueco que antes quedaba muerto al pie de cada columna.
+SEP_HOTELES = 1.2
 # Pequeño colchón para que ninguna línea toque el borde de la mancha
 ancho_texto = COLUMN_WIDTH - 1.5
 
-# --- PALETA DE COLOR (tono de las fotos, ligeramente hacia el cian) ---
-AZUL_PORTADA = (64, 152, 193)   # fondo de las portadas azules
-AZUL_ACENTO = (64, 152, 193)    # todos los azules usan el mismo tono
+# ---------------------------------------------------------------------------
+# PALETA DE COLOR
+# ---------------------------------------------------------------------------
+# "color" -> azul de las fotos. Obliga a elegir tinta de color en KDP, que en
+#            un libro de 524 paginas dispara el coste de impresion.
+# "bn"    -> pensado para imprimir en blanco y negro. NO dejamos que Amazon
+#            convierta el azul por su cuenta: ese azul se volveria un gris 130,
+#            MAS CLARO que el texto negro (gris 30), y las cabeceras y
+#            localidades quedarian mas desvaidas que los datos que encabezan.
+#            Aqui van en negro puro, que destaca por peso, y las portadas de
+#            seccion en gris oscuro con el texto en blanco.
+IMPRESION = "color"             # "color" o "bn"
+
+if IMPRESION == "bn":
+    AZUL_PORTADA = (55, 55, 55)     # fondo de las portadas de seccion
+    AZUL_ACENTO = (0, 0, 0)         # cabeceras de provincia y localidades
+else:
+    AZUL_PORTADA = (64, 152, 193)   # fondo de las portadas azules
+    AZUL_ACENTO = (64, 152, 193)    # todos los azules usan el mismo tono
 
 
 def formatear_clasificacion(val):
@@ -465,8 +528,11 @@ def _dibujar_separador(pdf, x0, ancho, y):
     pdf.set_fill_color(255, 255, 255)
     pdf.set_line_width(0.5)
     cx = x0 + ancho / 2
-    largo = ancho * 0.28   # longitud de cada media línea
-    hueco = ancho * 0.05   # separación entre línea y rombo
+    # Factores calculados sobre el ANCHO DE CONTENIDO (116 mm) para que el
+    # separador conserve la misma longitud visual (~100 mm) que tenía cuando se
+    # dibujaba sobre el ancho del recorte.
+    largo = ancho * 0.368  # longitud de cada media línea
+    hueco = ancho * 0.066  # separación entre línea y rombo
     pdf.line(cx - hueco - largo, y, cx - hueco, y)
     pdf.line(cx + hueco, y, cx + hueco + largo, y)
     # Rombo central (4 vértices)
@@ -482,7 +548,7 @@ def _tamano_fuente_ajustado(pdf, lineas, ancho_util, size_max=13, size_min=6):
     caben en `ancho_util`."""
     size = size_max
     while size > size_min:
-        pdf.set_font("Helvetica", "B", size)
+        pdf.set_font(FUENTE, "B", size)
         if all(pdf.get_string_width(_enc(l)) <= ancho_util for l in lineas):
             return size
         size -= 0.5
@@ -491,8 +557,7 @@ def _tamano_fuente_ajustado(pdf, lineas, ancho_util, size_max=13, size_min=6):
 
 def dibujar_portada_seccion(pdf, lineas_es, lineas_en, page_number_display):
     """Portada azul de sección, bilingüe, al estilo de las fotos:
-    - Azul a sangre: cubre TODO el papel, sangrado incluido, para que no quede
-      ningún borde blanco después del corte
+    - Azul de borde a borde: cubre TODA la página, sin ningún margen blanco
     - Bloque en español (mitad superior) centrado
     - Separador decorativo (línea — rombo — línea)
     - Bloque en inglés (mitad inferior) centrado
@@ -504,31 +569,40 @@ def dibujar_portada_seccion(pdf, lineas_es, lineas_en, page_number_display):
         pdf.paginas_sin_pie = set()
     pdf.paginas_sin_pie.add(pdf.page_no())
 
-    # Fondo azul a sangre completa (incluida la zona de sangrado)
+    # Fondo azul cubriendo la PÁGINA ENTERA, de borde a borde: cero margen
+    # blanco. Se pinta además 2 mm MÁS GRANDE que el papel por los cuatro
+    # lados; el visor recorta el sobrante, y así nunca queda una línea blanca
+    # de un píxel en el borde por redondeo del RIP de la imprenta.
     pdf.set_fill_color(*AZUL_PORTADA)
-    pdf.rect(0, 0, PAGE_WIDTH, PAGE_HEIGHT, "F")
+    pdf.rect(-2, -2, PAGE_WIDTH + 4, PAGE_HEIGHT + 4, "F")
     pdf.set_text_color(255, 255, 255)
 
     # El texto se centra respecto al ÁREA DE CORTE (lo que queda del papel tras
     # guillotinar), no respecto a la mancha: así se ve perfectamente centrado.
     # El ancho útil se limita al medianil por ambos lados, de modo que el
     # bloque centrado sigue respetando el margen interior.
-    x0 = x_corte(pdf.page_no())
+    # Los bloques se centran sobre el ÁREA DE CONTENIDO, que es el eje que usa
+    # todo el resto del libro (cabeceras, títulos, tablas y números de página),
+    # NO sobre el centro del papel. Como el medianil es mayor que el margen
+    # exterior, ambos ejes se separan 1.1 mm; usar el del contenido es lo
+    # correcto porque el lomo se traga parte del medianil al encuadernar.
+    x0 = x_contenido(pdf.page_no())
     y0 = BLEED
-    ancho = TRIM_WIDTH
+    ancho = CONTENT_WIDTH
     alto = TRIM_HEIGHT
 
-    # Número de página arriba a la derecha, dentro de los márgenes
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_xy(x_contenido(pdf.page_no()) + CONTENT_WIDTH - 20, Y_TOP + 4)
+    # Número de página arriba a la derecha, a ras del borde del contenido,
+    # exactamente en la misma posición que en la página del índice 1.
+    pdf.set_font(FUENTE, "", 9)
+    pdf.set_xy(x0 + CONTENT_WIDTH - 15, Y_TOP)
     pdf.cell(15, 6, str(page_number_display), align="R")
 
-    ancho_util = ancho - 2 * MARGIN_GUTTER
+    ancho_util = ancho - 2
     size = _tamano_fuente_ajustado(pdf, lineas_es + lineas_en, ancho_util)
     alt = size * 0.62  # alto de línea proporcional al cuerpo
 
     # Bloque español (centrado alrededor del 30% de la mancha)
-    pdf.set_font("Helvetica", "B", size)
+    pdf.set_font(FUENTE, "B", size)
     y_es = y0 + alto * 0.30 - (len(lineas_es) * alt) / 2
     pdf.set_xy(x0, y_es)
     for linea in lineas_es:
@@ -540,7 +614,7 @@ def dibujar_portada_seccion(pdf, lineas_es, lineas_en, page_number_display):
 
     # Bloque inglés (centrado alrededor del 68% de la mancha)
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", "B", size)
+    pdf.set_font(FUENTE, "B", size)
     y_en = y0 + alto * 0.68 - (len(lineas_en) * alt) / 2
     pdf.set_xy(x0, y_en)
     for linea in lineas_en:
@@ -552,6 +626,36 @@ def dibujar_portada_seccion(pdf, lineas_es, lineas_en, page_number_display):
     pdf.set_draw_color(0, 0, 0)
     pdf.set_line_width(0.2)
 
+
+
+# ---------------------------------------------------------------------------
+# COLOCACIÓN DE LAS PORTADAS AZULES: SIEMPRE EN PÁGINA IMPAR (ANVERSO)
+# ---------------------------------------------------------------------------
+# En un libro encuadernado las páginas IMPARES son las de la derecha (recto /
+# anverso) y las PARES las de la izquierda (verso / dorso). Para que la portada
+# azul se vea siempre "de frente" al pasar la hoja y su dorso quede en blanco:
+#   1. Si la portada fuese a caer en página par, se mete antes una hoja blanca.
+#   2. Después de la portada se mete SIEMPRE otra hoja blanca (su reverso).
+# Así el contenido siguiente vuelve a empezar en impar.
+def pagina_en_blanco(pdf):
+    """Añade una página totalmente vacía (sin cabecera, sin pie, sin número)."""
+    pdf.provincia_actual = None
+    pdf.provincia_continuacion = False
+    pdf.add_page()
+
+
+def nueva_portada_seccion(pdf, lineas_es, lineas_en):
+    """Añade una portada azul garantizando que cae en página IMPAR (anverso)
+    y que su reverso queda en blanco."""
+    pdf.provincia_actual = None
+    pdf.provincia_continuacion = False
+    # La portada sería la página siguiente a la actual: si fuese par, relleno.
+    if (pdf.page_no() + 1) % 2 == 0:
+        pagina_en_blanco(pdf)
+    pdf.add_page()
+    dibujar_portada_seccion(pdf, lineas_es, lineas_en, pdf.page_no())
+    # Reverso en blanco: el contenido siguiente arrancará de nuevo en impar.
+    pagina_en_blanco(pdf)
 
 # --- TEXTOS DE LAS PORTADAS AZULES (exactos de las fotos) ---
 PORTADA_CATALOGO_ES = [
@@ -681,7 +785,7 @@ def render_catalogo(pdf):
         ]
 
         # Altura estimada del hotel (solo para decidir salto de columna/página)
-        pdf.set_font("Helvetica", "", FONT_NOMBRE)
+        pdf.set_font(FUENTE, "", FONT_NOMBRE)
         altura_hotel = calcular_altura_bloque(
             pdf, [_l for _l in lineas_hotel if _l], ancho_texto, line_height
         )
@@ -693,7 +797,7 @@ def render_catalogo(pdf):
                 calcular_altura_linea(pdf, localidad.upper(), COLUMN_WIDTH, line_height) + 4
             )
 
-        altura_total_requerida = altura_localidad + altura_hotel + 2
+        altura_total_requerida = altura_localidad + altura_hotel + SEP_HOTELES
         localidad_cont = False
 
         if y_actual[current_col] + altura_total_requerida > Y_LIMIT:
@@ -721,7 +825,7 @@ def render_catalogo(pdf):
             if localidad not in loc_pages:
                 loc_pages[localidad] = pdf.page_no()
             pdf.set_xy(x, y_pos)
-            pdf.set_font("Helvetica", "B", FONT_LOCALIDAD)
+            pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
             pdf.set_text_color(*AZUL_ACENTO)
             pdf.multi_cell(COLUMN_WIDTH, line_height, _enc(localidad.upper()), border=0, align="L")
             y_pos = pdf.get_y()
@@ -729,7 +833,7 @@ def render_catalogo(pdf):
         elif localidad_cont:
             y_pos = y_pos + 1
             pdf.set_xy(x_positions[0], y_pos)
-            pdf.set_font("Helvetica", "B", FONT_LOCALIDAD)
+            pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
             pdf.set_text_color(*AZUL_ACENTO)
             pdf.multi_cell(COLUMN_WIDTH, line_height, _enc(localidad.upper() + " (cont.)"), border=0, align="L")
             cont_y = pdf.get_y()
@@ -742,12 +846,12 @@ def render_catalogo(pdf):
         pdf.set_xy(x, y_pos)
         pdf.set_text_color(0, 0, 0)
         if linea_cat:
-            pdf.set_font("Helvetica", "B", FONT_CAT)
+            pdf.set_font(FUENTE, "B", FONT_CAT)
             pdf.multi_cell(ancho_texto, line_height, linea_cat, border=0, align="L")
         pdf.set_x(x)
-        pdf.set_font("Helvetica", "B", FONT_NOMBRE)
+        pdf.set_font(FUENTE, "B", FONT_NOMBRE)
         pdf.multi_cell(ancho_texto, line_height, linea_nombre, border=0, align="L")
-        pdf.set_font("Helvetica", "", FONT_DETALLE)
+        pdf.set_font(FUENTE, "", FONT_DETALLE)
         if linea_reg:
             pdf.set_x(x)
             pdf.multi_cell(ancho_texto, line_height, linea_reg, border=0, align="L")
@@ -763,7 +867,7 @@ def render_catalogo(pdf):
             pdf.set_x(x)
             pdf.multi_cell(ancho_texto, line_height, linea_web, border=0, align="L")
 
-        y_actual[current_col] = pdf.get_y() + 2
+        y_actual[current_col] = pdf.get_y() + SEP_HOTELES
 
     return prov_pages, hotel_pages, loc_pages
 
@@ -773,12 +877,18 @@ def render_catalogo(pdf):
 paginas_fijas_antes = (
     (1 if SHOW_PORTADA else 0)
     + (1 if SHOW_SEGUNDA_PAGINA else 0)
-    + 2  # índice de provincias + portada azul del catálogo
+    + 1  # índice de provincias
 )
+# La portada azul del catálogo se fuerza a página IMPAR y lleva reverso blanco,
+# igual que en la pasada 2; hay que contarlo aquí o los números del índice
+# de provincias saldrían desplazados.
+if (paginas_fijas_antes + 1) % 2 == 0:
+    paginas_fijas_antes += 1        # hoja blanca de relleno antes de la portada
+paginas_fijas_antes += 2            # portada azul + su reverso en blanco
 
 _scratch = PDF()
 _scratch.set_auto_page_break(auto=False)
-_scratch.set_font("Helvetica", "", 9)
+_scratch.set_font(FUENTE, "", 9)
 _scratch.provincia_actual = None  # sin cabecera/pie en las páginas fijas dummy
 for _ in range(paginas_fijas_antes):
     _scratch.add_page()
@@ -796,7 +906,7 @@ for item in indice_provincias:
 # --- CREAR PDF FINAL ---
 pdf = PDF()
 pdf.set_auto_page_break(auto=False)
-pdf.set_font("Helvetica", "", 9)
+pdf.set_font(FUENTE, "", 9)
 pdf.set_text_color(0, 0, 0)
 pdf.provincia_continuacion = False
 
@@ -827,19 +937,19 @@ pdf.add_page()
 X_IDX = x_contenido(pdf.page_no())
 
 # Número de página arriba a la derecha (estilo foto)
-pdf.set_font("Helvetica", "", 9)
+pdf.set_font(FUENTE, "", 9)
 pdf.set_text_color(0, 0, 0)
 pdf.set_xy(X_IDX + CONTENT_WIDTH - 15, Y_TOP)
 pdf.cell(15, 6, str(pdf.page_no()), align="R")
 
 # Cabecera "ÍNDICE 1  -  INDEX 1"
 pdf.set_xy(X_IDX, Y_TOP + 1)
-pdf.set_font("Helvetica", "B", 10)
+pdf.set_font(FUENTE, "B", 10)
 pdf.cell(CONTENT_WIDTH, 6, _enc("ÍNDICE 1     -     INDEX 1"), align="C", new_x="LEFT", new_y="NEXT")
 pdf.ln(1)
-pdf.set_font("Helvetica", "B", 11)
+pdf.set_font(FUENTE, "B", 11)
 pdf.cell(CONTENT_WIDTH, 6, _enc("PROVINCIAS DE ESPAÑA Y SUS CAPITALES"), new_x="LEFT", new_y="NEXT", align="C")
-pdf.set_font("Helvetica", "B", 9)
+pdf.set_font(FUENTE, "B", 9)
 pdf.cell(CONTENT_WIDTH, 5, "PROVINCES OF SPAIN AND THEIR CAPITALS", new_x="LEFT", new_y="NEXT", align="C")
 pdf.ln(3)
 
@@ -863,7 +973,7 @@ while len(right_items_prov) < len(left_items_prov):
 _alto_disp_prov = Y_LIMIT - pdf.get_y()
 row_h_prov = min(7.0, _alto_disp_prov / (len(left_items_prov) + 1))
 
-pdf.set_font("Helvetica", "B", 7)
+pdf.set_font(FUENTE, "B", 7)
 y_header_prov = pdf.get_y()
 for _x_tabla in (x_left_prov, x_right_prov):
     pdf.set_xy(_x_tabla, y_header_prov)
@@ -876,7 +986,7 @@ pdf.set_y(y_header_prov + row_h_prov)
 # no cabe en el ancho disponible. Empieza en `font_size_default` y baja
 # hasta `font_size_min` en pasos de 0.5 hasta encontrar uno que quepa
 # (con un pequeño padding interno). Si ni al mínimo cabe, usa el mínimo.
-def cell_ajustada(pdf, w, h, txt, align, font_family="Helvetica", font_style="",
+def cell_ajustada(pdf, w, h, txt, align, font_family=FUENTE, font_style="",
                   font_size_default=7, font_size_min=4.5, padding=1.0):
     txt_safe = txt.encode("latin-1", "ignore").decode("latin-1")
     ancho_util = w - padding * 2
@@ -920,27 +1030,13 @@ for i in range(len(left_items_prov)):
     pdf.set_y(y_p + row_h_prov)
 
 # --- PORTADA AZUL DEL CATÁLOGO (antes de las provincias) ---
-pdf.provincia_actual = None
-pdf.add_page()
-dibujar_portada_seccion(
-    pdf,
-    PORTADA_CATALOGO_ES,
-    PORTADA_CATALOGO_EN,
-    pdf.page_no(),
-)
+nueva_portada_seccion(pdf, PORTADA_CATALOGO_ES, PORTADA_CATALOGO_EN)
 
 # --- GENERAR CATÁLOGO (pasada 2, render final; páginas idénticas a la pasada 1) ---
 prov_pages_final, hotel_pages, loc_pages = render_catalogo(pdf)
 
 # --- PORTADA ÍNDICE ALFABÉTICO DE HOTELES (estilo minimalista) ---
-pdf.provincia_actual = None
-pdf.add_page()
-dibujar_portada_seccion(
-    pdf,
-    PORTADA_HOTELES_ES,
-    PORTADA_HOTELES_EN,
-    pdf.page_no(),
-)
+nueva_portada_seccion(pdf, PORTADA_HOTELES_ES, PORTADA_HOTELES_EN)
 
 # --- INICIAR ÍNDICE ALFABÉTICO DE HOTELES ---
 pdf.provincia_actual = None
@@ -962,7 +1058,7 @@ def cabecera_indice(pdf, titulo_es, titulo_en):
     """Imprime los dos títulos bilingües y deja el cursor bajo ellos."""
     x = x_contenido(pdf.page_no())
     pdf.set_xy(x, Y_TOP)
-    pdf.set_font("Helvetica", "B", FONT_TITULO_INDICE)
+    pdf.set_font(FUENTE, "B", FONT_TITULO_INDICE)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(CONTENT_WIDTH, 4.5, _enc(titulo_es), new_x="LEFT", new_y="NEXT", align="C")
     pdf.cell(CONTENT_WIDTH, 4.5, _enc(titulo_en), new_x="LEFT", new_y="NEXT", align="C")
@@ -1018,7 +1114,7 @@ def format_index_entry(pdf, name, page, max_width):
 
 
 # ---- IMPRIMIR ÍNDICE EN COLUMNAS VERTICALES ----
-pdf.set_font("Helvetica", "", FONT_INDICE)
+pdf.set_font(FUENTE, "", FONT_INDICE)
 pdf.set_text_color(0, 0, 0)
 
 pdf.set_y(y_start_index)
@@ -1050,7 +1146,7 @@ while hotel_idx < len(hoteles_lista):
             # Nueva página
             pdf.add_page()
             y_nueva = cabecera_indice(pdf, TITULO_HOTELES_ES, TITULO_HOTELES_EN)
-            pdf.set_font("Helvetica", "", FONT_INDICE)
+            pdf.set_font(FUENTE, "", FONT_INDICE)
 
             current_col = 0
             x_cols = columnas_indice(pdf.page_no(), COLS_INDEX, col_width_index)
@@ -1069,14 +1165,7 @@ while hotel_idx < len(hoteles_lista):
     hotel_idx += 1
 
 # --- PORTADA ÍNDICE ALFABÉTICO DE POBLACIONES (estilo minimalista) ---
-pdf.provincia_actual = None
-pdf.add_page()
-dibujar_portada_seccion(
-    pdf,
-    PORTADA_POBLACIONES_ES,
-    PORTADA_POBLACIONES_EN,
-    pdf.page_no(),
-)
+nueva_portada_seccion(pdf, PORTADA_POBLACIONES_ES, PORTADA_POBLACIONES_EN)
 
 # --- INICIAR ÍNDICE ALFABÉTICO DE POBLACIONES ---
 pdf.provincia_actual = None
@@ -1105,7 +1194,7 @@ y_start_pob = y_start_pob_inicial
 y_limit_pob = Y_LIMIT_INDICE
 
 # ---- IMPRIMIR ÍNDICE DE POBLACIONES EN COLUMNAS VERTICALES ----
-pdf.set_font("Helvetica", "", FONT_INDICE)
+pdf.set_font(FUENTE, "", FONT_INDICE)
 pdf.set_text_color(0, 0, 0)
 pdf.set_y(y_start_pob)
 
@@ -1125,7 +1214,7 @@ while pob_idx < len(poblaciones_lista):
         if current_col_pob >= COLS_POB:
             pdf.add_page()
             y_nueva_pob = cabecera_indice(pdf, TITULO_POB_ES, TITULO_POB_EN)
-            pdf.set_font("Helvetica", "", FONT_INDICE)
+            pdf.set_font(FUENTE, "", FONT_INDICE)
 
             current_col_pob = 0
             x_cols_pob = columnas_indice(pdf.page_no(), COLS_POB, col_width_pob)
@@ -1141,5 +1230,15 @@ while pob_idx < len(poblaciones_lista):
     y_cols_pob[current_col_pob] += row_height_pob
     pob_idx += 1
 
+# --- CIERRE: el interior debe tener un número PAR de páginas ---
+# Cada hoja física lleva dos páginas; si el total fuese impar, la imprenta
+# añadiría una hoja por su cuenta. Mejor añadirla nosotros, limpia.
+if pdf.page_no() % 2 == 1:
+    pagina_en_blanco(pdf)
+
 pdf.output(PDF_FILE)
+print(f"PDF generado: {PDF_FILE} - {pdf.page_no()} páginas, "
+      f"{PAGE_WIDTH:.2f} x {PAGE_HEIGHT:.2f} mm "
+      f"({PAGE_WIDTH / 25.4:.3f}\" x {PAGE_HEIGHT / 25.4:.3f}\") "
+      f"{'CON sangrado' if CON_SANGRADO else 'SIN sangrado'}")
 print("PDF generado con índice alfabético de 5 columnas verticales:", PDF_FILE)
