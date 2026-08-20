@@ -93,6 +93,24 @@ df = df.replace("?", "")
 # Renombrar provincias para usar las denominaciones oficiales actuales
 df["PROVINCIA"] = df["PROVINCIA"].replace({"ÁLAVA": "ARABA"})
 
+# ---------------------------------------------------------------------------
+# CORRECCIONES MANUALES
+# ---------------------------------------------------------------------------
+# Retoques puntuales sobre los datos. Se aplican aqui y NO en el excel de
+# origen, para que no se pierdan si algun dia se vuelve a exportar la hoja.
+# Clave = ID del hotel; valor = {columna: nuevo valor}.
+CORRECCIONES = {
+    2677: {"DIRECCION": "PADILLA, 173"},   # HOTEL GLORIES (Barcelona)
+}
+
+for _id, _campos in CORRECCIONES.items():
+    _fila = df["ID"] == _id
+    if not _fila.any():
+        print(f"AVISO: no hay ningun hotel con ID {_id}; correccion ignorada")
+        continue
+    for _col, _valor in _campos.items():
+        df.loc[_fila, _col] = _valor
+
 
 # Extraer valor numérico de la clasificación para ordenar por estrellas (5->0)
 def extraer_estrellas(val):
@@ -413,10 +431,16 @@ PASO_COLUMNA = COLUMN_WIDTH + SEP_COLUMNAS
 # Cabecera de provincia + línea decorativa
 Y_LINEA = Y_TOP + 6.5
 Y_START = Y_TOP + 9.5
-# El pie va pegado abajo: la celda del número apoya justo en el margen
-# inferior, y el texto del catálogo puede bajar hasta 1 mm por encima de ella.
-Y_PIE = Y_BOTTOM - 4.5
-Y_LIMIT = Y_PIE - 1.0
+# El pie tiene su PROPIO margen, independiente de MARGIN_BOTTOM. Si se bajara
+# tocando MARGIN_BOTTOM, el catálogo ganaría altura, entrarían más hoteles por
+# columna y cambiaría la paginación (y con ella el lomo de la cubierta). Así el
+# número baja solo él.
+ALTO_PIE = 4.5          # alto de la celda que contiene el número
+MARGIN_PIE = 5.6        # del borde de corte inferior a la base de esa celda
+Y_PIE = PAGE_HEIGHT - BLEED - MARGIN_PIE - ALTO_PIE
+
+# El límite del texto sigue atado a MARGIN_BOTTOM, como hasta ahora.
+Y_LIMIT = Y_BOTTOM - ALTO_PIE - 1.0
 
 # Tipografías del catálogo (ajustadas al ancho real de columna de 6"x9"
 # y a la densidad necesaria para mantener el libro por debajo de 600 páginas)
@@ -430,6 +454,14 @@ line_height = 2.65
 # Separación vertical entre el final de un hotel y el comienzo del siguiente.
 # Bajarla aprovecha el hueco que antes quedaba muerto al pie de cada columna.
 SEP_HOTELES = 1.2
+
+# Justificación vertical: cuando una columna se cierra por estar llena, el
+# hueco que sobra al pie se reparte a partes iguales entre los hoteles, de modo
+# que todas las columnas llenas terminan a la misma altura. `SEP_EXTRA_MAX`
+# limita cuánto puede crecer cada separación, por si alguna columna se cierra
+# con un hueco anormalmente grande.
+JUSTIFICAR_COLUMNAS = True
+SEP_EXTRA_MAX = 6.0
 # Pequeño colchón para que ninguna línea toque el borde de la mancha
 ancho_texto = COLUMN_WIDTH - 1.5
 
@@ -729,11 +761,49 @@ for prov in provincias_unicas:
 # ---------------------------------------------------------------------------
 
 
+def alto_lineas(pdf, texto, ancho):
+    """Nº de líneas que ocupará `texto` al dibujarlo, sin dibujarlo."""
+    if not texto:
+        return 0
+    return len(pdf.multi_cell(ancho, line_height, texto,
+                              dry_run=True, output="LINES"))
+
+
+def alto_real_hotel(pdf, d):
+    """Alto EXACTO (mm) del bloque de un hotel. A diferencia de
+    `calcular_altura_bloque`, que estima por lo alto para decidir saltos, esto
+    mide lo que de verdad va a ocupar: es lo que permite saber cuánto hueco
+    sobra al pie de la columna y repartirlo."""
+    n = 0
+    if d["cat"]:
+        pdf.set_font(FUENTE, "B", FONT_CAT)
+        n += alto_lineas(pdf, d["cat"], ancho_texto)
+    pdf.set_font(FUENTE, "B", FONT_NOMBRE)
+    n += alto_lineas(pdf, d["nombre"], ancho_texto)
+    pdf.set_font(FUENTE, "", FONT_DETALLE)
+    for clave in ("reg", "dir", "loc", "tel", "web"):
+        n += alto_lineas(pdf, d[clave], ancho_texto)
+    return n * line_height
+
+
+def alto_real_localidad(pdf, localidad):
+    """Alto EXACTO (mm) del rótulo de localidad, incluido el 1 mm de aire."""
+    pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
+    return 1 + alto_lineas(pdf, _enc(localidad.upper()), COLUMN_WIDTH) * line_height
+
+
 def render_catalogo(pdf):
     """Dibuja TODO el catálogo por provincias en `pdf`.
 
     Devuelve (prov_pages, hotel_pages, loc_pages): la página REAL de la primera
     aparición de cada provincia, hotel (nombre limpio) y localidad.
+
+    Los hoteles no se dibujan según van saliendo: se acumulan en un buffer por
+    columna y se vuelcan cuando la columna se cierra. Así, en el momento de
+    dibujar, se sabe cuánto hueco sobra al pie y se reparte a partes iguales
+    entre los hoteles (justificación vertical), de modo que todas las columnas
+    llenas terminan a la misma altura. El reparto NO altera la paginación: las
+    decisiones de salto de columna y de página son exactamente las de antes.
     """
     prov_pages = {}
     hotel_pages = {}
@@ -751,6 +821,61 @@ def render_catalogo(pdf):
     localidad_anterior = ""
     current_col = 0
 
+    # --- buffer de justificación vertical ---
+    buffer = [[] for _ in range(COLS)]
+    y_inicio = [Y_START] * COLS
+
+    def dibujar_item(x, y, item):
+        """Dibuja un rótulo de localidad (si lo lleva) y el bloque del hotel."""
+        if item["loc"] is not None:
+            y += 1
+            pdf.set_xy(x, y)
+            pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
+            pdf.set_text_color(*AZUL_ACENTO)
+            pdf.multi_cell(COLUMN_WIDTH, line_height, _enc(item["loc"]),
+                           border=0, align="L")
+            y = pdf.get_y()
+
+        d = item["d"]
+        pdf.set_xy(x, y)
+        pdf.set_text_color(0, 0, 0)
+        if d["cat"]:
+            pdf.set_font(FUENTE, "B", FONT_CAT)
+            pdf.multi_cell(ancho_texto, line_height, d["cat"], border=0, align="L")
+        pdf.set_x(x)
+        pdf.set_font(FUENTE, "B", FONT_NOMBRE)
+        pdf.multi_cell(ancho_texto, line_height, d["nombre"], border=0, align="L")
+        pdf.set_font(FUENTE, "", FONT_DETALLE)
+        for clave in ("reg", "dir", "loc", "tel", "web"):
+            if d[clave]:
+                pdf.set_x(x)
+                pdf.multi_cell(ancho_texto, line_height, d[clave], border=0, align="L")
+        return pdf.get_y()
+
+    def volcar_columna(col, completa):
+        """Vuelca a la página lo acumulado en la columna.
+
+        `completa` indica que la columna se cerró porque no cabía nada más; solo
+        en ese caso se reparte el hueco sobrante. La última columna de cada
+        provincia se queda con la separación normal: repartir tres hoteles a lo
+        largo de toda la página quedaría ridículo.
+        """
+        items = buffer[col]
+        buffer[col] = []
+        if not items:
+            return
+        sep = SEP_HOTELES
+        huecos = len(items) - 1
+        if completa and JUSTIFICAR_COLUMNAS and huecos > 0:
+            usado = sum(it["alto"] for it in items) + huecos * SEP_HOTELES
+            sobra = Y_LIMIT - y_inicio[col] - usado
+            if sobra > 0:
+                sep += min(sobra / huecos, SEP_EXTRA_MAX)
+        y = y_inicio[col]
+        x = x_positions[col]
+        for item in items:
+            y = dibujar_item(x, y, item) + sep
+
     for idx, row in df.iterrows():
         provincia = str(row["PROVINCIA"])
         localidad = str(row["LOCALIDAD"])
@@ -758,6 +883,9 @@ def render_catalogo(pdf):
 
         # CAMBIO DE PROVINCIA → NUEVA PÁGINA Y RESET DE ALTURAS
         if provincia != provincia_anterior:
+            # La columna a medias de la provincia anterior se vuelca ANTES de
+            # cambiar de página, o su contenido caería en la página siguiente.
+            volcar_columna(current_col, completa=False)
             provincia_anterior = provincia
             localidad_anterior = ""
             pdf.provincia_actual = provincia
@@ -766,22 +894,16 @@ def render_catalogo(pdf):
             x_positions = columnas(pdf.page_no())
             current_col = 0
             y_actual = [Y_START] * COLS
+            y_inicio = [Y_START] * COLS
             if provincia not in prov_pages:
                 prov_pages[provincia] = pdf.page_no()
 
         hotel_name_display = limpiar_nombre_hotel(hotel_name)
 
         _d = construir_lineas_hotel(row)
-        linea_cat = _d["cat"]
-        linea_nombre = _d["nombre"]
-        linea_reg = _d["reg"]
-        linea_dir = _d["dir"]
-        linea_loc = _d["loc"]
-        linea_tel = _d["tel"]
-        linea_web = _d["web"]
         lineas_hotel = [
-            linea_nombre, linea_cat, linea_reg,
-            linea_dir, linea_loc, linea_tel, linea_web,
+            _d["nombre"], _d["cat"], _d["reg"],
+            _d["dir"], _d["loc"], _d["tel"], _d["web"],
         ]
 
         # Altura estimada del hotel (solo para decidir salto de columna/página)
@@ -801,6 +923,8 @@ def render_catalogo(pdf):
         localidad_cont = False
 
         if y_actual[current_col] + altura_total_requerida > Y_LIMIT:
+            # La columna se cierra por estar llena: aquí sí se justifica.
+            volcar_columna(current_col, completa=True)
             current_col += 1
             if current_col >= COLS:
                 pdf.provincia_continuacion = True
@@ -810,64 +934,43 @@ def render_catalogo(pdf):
                 x_positions = columnas(pdf.page_no())
                 current_col = 0
                 y_actual = [Y_START] * COLS
+                y_inicio = [Y_START] * COLS
 
         x = x_positions[current_col]
-        y_pos = y_actual[current_col]
 
         # ---- REGISTRAR HOTEL CON SU PÁGINA REAL (ya resuelto el salto de página) ----
         if hotel_name_display and hotel_name_display not in hotel_pages:
             hotel_pages[hotel_name_display] = pdf.page_no()
 
-        # TÍTULO DE LOCALIDAD
         if hay_cambio_localidad:
-            y_pos = y_pos + 1
             localidad_anterior = localidad
             if localidad not in loc_pages:
                 loc_pages[localidad] = pdf.page_no()
-            pdf.set_xy(x, y_pos)
-            pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
-            pdf.set_text_color(*AZUL_ACENTO)
-            pdf.multi_cell(COLUMN_WIDTH, line_height, _enc(localidad.upper()), border=0, align="L")
-            y_pos = pdf.get_y()
-            y_actual[current_col] = y_pos
         elif localidad_cont:
-            y_pos = y_pos + 1
-            pdf.set_xy(x_positions[0], y_pos)
+            # El "(cont.)" encabeza la página entera, no una columna: se dibuja
+            # al vuelo y empuja hacia abajo el arranque de las tres columnas.
+            pdf.set_xy(x_positions[0], Y_START + 1)
             pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
             pdf.set_text_color(*AZUL_ACENTO)
-            pdf.multi_cell(COLUMN_WIDTH, line_height, _enc(localidad.upper() + " (cont.)"), border=0, align="L")
+            pdf.multi_cell(COLUMN_WIDTH, line_height,
+                           _enc(localidad.upper() + " (cont.)"), border=0, align="L")
             cont_y = pdf.get_y()
             for _c in range(COLS):
                 y_actual[_c] = cont_y
-            y_pos = cont_y
-            x = x_positions[current_col]
+                y_inicio[_c] = cont_y
 
-        # TEXTO DEL HOTEL
-        pdf.set_xy(x, y_pos)
-        pdf.set_text_color(0, 0, 0)
-        if linea_cat:
-            pdf.set_font(FUENTE, "B", FONT_CAT)
-            pdf.multi_cell(ancho_texto, line_height, linea_cat, border=0, align="L")
-        pdf.set_x(x)
-        pdf.set_font(FUENTE, "B", FONT_NOMBRE)
-        pdf.multi_cell(ancho_texto, line_height, linea_nombre, border=0, align="L")
-        pdf.set_font(FUENTE, "", FONT_DETALLE)
-        if linea_reg:
-            pdf.set_x(x)
-            pdf.multi_cell(ancho_texto, line_height, linea_reg, border=0, align="L")
-        if linea_dir:
-            pdf.set_x(x)
-            pdf.multi_cell(ancho_texto, line_height, linea_dir, border=0, align="L")
-        pdf.set_x(x)
-        pdf.multi_cell(ancho_texto, line_height, linea_loc, border=0, align="L")
-        if linea_tel:
-            pdf.set_x(x)
-            pdf.multi_cell(ancho_texto, line_height, linea_tel, border=0, align="L")
-        if linea_web:
-            pdf.set_x(x)
-            pdf.multi_cell(ancho_texto, line_height, linea_web, border=0, align="L")
+        item = {
+            "loc": localidad.upper() if hay_cambio_localidad else None,
+            "d": _d,
+        }
+        item["alto"] = alto_real_hotel(pdf, _d)
+        if hay_cambio_localidad:
+            item["alto"] += alto_real_localidad(pdf, localidad)
+        buffer[current_col].append(item)
+        y_actual[current_col] += item["alto"] + SEP_HOTELES
 
-        y_actual[current_col] = pdf.get_y() + SEP_HOTELES
+    # La última columna del catálogo queda a medias: sin justificar.
+    volcar_columna(current_col, completa=False)
 
     return prov_pages, hotel_pages, loc_pages
 
