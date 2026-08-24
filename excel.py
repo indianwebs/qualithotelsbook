@@ -234,7 +234,9 @@ class PDF(FPDF):
         # para entonces `provincia_actual` puede haber cambiado. Decidimos aquí
         # (al abrir la página) si esta página lleva número, y el pie lo consulta.
         con_cabecera = getattr(self, "provincia_actual", "") not in [None, "", False]
-        self._pie_visible = con_cabecera
+        # Los indices alfabeticos finales no llevan cabecera de provincia, pero
+        # SI deben numerarse: sin numero, la guia aparentaba acabar en la 467.
+        self._pie_visible = con_cabecera or getattr(self, "pie_forzado", False)
 
         if not con_cabecera:
             return
@@ -673,6 +675,7 @@ def pagina_en_blanco(pdf):
     """Añade una página totalmente vacía (sin cabecera, sin pie, sin número)."""
     pdf.provincia_actual = None
     pdf.provincia_continuacion = False
+    pdf.pie_forzado = False
     pdf.add_page()
 
 
@@ -681,6 +684,7 @@ def nueva_portada_seccion(pdf, lineas_es, lineas_en):
     y que su reverso queda en blanco."""
     pdf.provincia_actual = None
     pdf.provincia_continuacion = False
+    pdf.pie_forzado = False   # la portada azul lleva su numero arriba a la dcha.
     # La portada sería la página siguiente a la actual: si fuese par, relleno.
     if (pdf.page_no() + 1) % 2 == 0:
         pagina_en_blanco(pdf)
@@ -1143,6 +1147,7 @@ nueva_portada_seccion(pdf, PORTADA_HOTELES_ES, PORTADA_HOTELES_EN)
 
 # --- INICIAR ÍNDICE ALFABÉTICO DE HOTELES ---
 pdf.provincia_actual = None
+pdf.pie_forzado = True          # a partir de aqui las paginas van numeradas
 pdf.add_page()
 
 
@@ -1272,6 +1277,7 @@ nueva_portada_seccion(pdf, PORTADA_POBLACIONES_ES, PORTADA_POBLACIONES_EN)
 
 # --- INICIAR ÍNDICE ALFABÉTICO DE POBLACIONES ---
 pdf.provincia_actual = None
+pdf.pie_forzado = True          # a partir de aqui las paginas van numeradas
 pdf.add_page()
 
 # Títulos del índice de poblaciones
