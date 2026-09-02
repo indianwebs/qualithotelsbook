@@ -1,7 +1,7 @@
 """Genera la cubierta completa (contraportada + lomo + portada) para KDP.
 
 Medidas tomadas del calculador oficial de KDP para:
-    tapa blanda | tinta blanco y negro | papel blanco | 6" x 9" | 524 paginas
+    tapa blanda | tinta blanco y negro | papel blanco | 6" x 9" | 526 paginas
 
     Portada completa ....... 341,12 x 234,95 mm
     Portada / contraportada  152,40 x 228,60 mm cada una
@@ -26,7 +26,7 @@ from fpdf import FPDF
 # ---------------------------------------------------------------------------
 # PARAMETROS DEL LIBRO
 # ---------------------------------------------------------------------------
-PAGINAS = 524
+PAGINAS = 526
 # Debe coincidir EXACTAMENTE con "Tinta y tipo de papel" en KDP: cada opcion
 # tiene un grosor de hoja distinto y por tanto un lomo distinto.
 PAPEL = "color_estandar"      # negro_blanco | negro_crema | color_estandar | color_premium

@@ -1275,13 +1275,11 @@ def _metricas_indice_general(pdf, textos):
         size -= 0.25
 
 
-def _cabecera_indice_general(pdf, idioma):
-    """Número de página, título, subtítulo y filete. Devuelve la Y de arranque."""
+def _folio_superior(pdf):
+    """Número de página arriba, SIEMPRE en el borde exterior: a la derecha en
+    las impares (las de la derecha del libro) y a la izquierda en las pares,
+    para que nunca caiga del lado del lomo."""
     x = x_contenido(pdf.page_no())
-
-    # Folio arriba, SIEMPRE en el borde exterior: a la derecha en las páginas
-    # impares (las de la derecha del libro) y a la izquierda en las pares, para
-    # que nunca caiga del lado del lomo.
     pdf.set_font(FUENTE, "", 9)
     pdf.set_text_color(0, 0, 0)
     if pdf.page_no() % 2 == 1:
@@ -1290,6 +1288,12 @@ def _cabecera_indice_general(pdf, idioma):
     else:
         pdf.set_xy(x, Y_TOP)
         pdf.cell(15, 6, str(pdf.page_no()), align="L")
+
+
+def _cabecera_indice_general(pdf, idioma):
+    """Número de página, título, subtítulo y filete. Devuelve la Y de arranque."""
+    x = x_contenido(pdf.page_no())
+    _folio_superior(pdf)
 
     pdf.set_xy(x, Y_TOP + 6)
     pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
@@ -1372,8 +1376,91 @@ def _render_indice_idioma(pdf, entradas, idioma, size, w_etiqueta, w_digitos):
     return paginas
 
 
+# ---------------------------------------------------------------------------
+# PÁGINA DEL MAPA POLÍTICO
+# ---------------------------------------------------------------------------
+MAPA_IMAGEN = "mapa final.jpg"
+
+# Marcadores del formato JPEG, escritos por su valor para no depender de
+# secuencias de escape dentro de literales de bytes.
+MARCA = bytes((0xFF,))          # todo marcador empieza por aquí
+SOI = bytes((0xFF, 0xD8))       # "Start Of Image": los dos primeros bytes
+TITULO_MAPA_ES = "MAPA POLÍTICO DE ESPAÑA"
+TITULO_MAPA_EN = "POLITICAL MAP OF SPAIN"
+FONT_MAPA_TITULO_EN = 11.0
+
+
+def _tamano_jpeg(ruta):
+    """Ancho y alto en píxeles de un JPEG, leyendo solo su cabecera.
+
+    Hace falta para centrar el mapa en la página ANTES de dibujarlo. Se lee a
+    mano para no arrastrar una librería de imágenes por dos números: basta con
+    recorrer los marcadores del fichero hasta el SOF, que es donde el formato
+    guarda las dimensiones.
+    """
+    with open(ruta, "rb") as f:
+        if f.read(2) != SOI:
+            raise ValueError(f"{ruta} no es un JPEG")
+        while True:
+            byte = f.read(1)
+            while byte and byte != MARCA:
+                byte = f.read(1)
+            marcador = f.read(1)
+            while marcador == MARCA:          # relleno entre marcadores
+                marcador = f.read(1)
+            if not marcador:
+                raise ValueError(f"no se encontró el tamaño en {ruta}")
+            # Los SOF (0xC0-0xCF) llevan las dimensiones, menos DHT, JPG y DAC
+            if 0xC0 <= marcador[0] <= 0xCF and marcador[0] not in (0xC4, 0xC8, 0xCC):
+                f.read(3)                     # longitud (2) + precisión (1)
+                alto = int.from_bytes(f.read(2), "big")
+                ancho = int.from_bytes(f.read(2), "big")
+                return ancho, alto
+            longitud = int.from_bytes(f.read(2), "big")
+            f.seek(longitud - 2, 1)
+
+
+def render_pagina_mapa(pdf):
+    """Página del mapa político, detrás de los dos índices.
+
+    Es una sola página con los títulos en los dos idiomas: el mapa es el mismo
+    para ambos, así que duplicarlo solo gastaría papel. No cuesta ninguna
+    página de más frente a no ponerlo, porque el catálogo arranca siempre en
+    impar y el script metería igualmente una hoja de relleno.
+    """
+    pdf.provincia_actual = None
+    pdf.provincia_continuacion = False
+    pdf.pie_forzado = False          # el número va arriba, como en el índice
+    pdf.add_page()
+    _folio_superior(pdf)
+
+    ancho_px, alto_px = _tamano_jpeg(MAPA_IMAGEN)
+    alto_img = CONTENT_WIDTH * alto_px / ancho_px
+    alto_es, alto_en = 9.0, 6.0
+
+    # Centrado en el hueco que queda bajo el folio
+    arriba = Y_TOP + 6.0
+    y = arriba + max(0.0, (Y_LIMIT - arriba - alto_es - alto_en - alto_img) / 2)
+    x = x_contenido(pdf.page_no())
+
+    # Mismo cuerpo, color y negrita que el título del índice, para que las
+    # páginas de los preliminares se lean como un conjunto
+    pdf.set_text_color(*AZUL_ACENTO)
+    pdf.set_xy(x, y)
+    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
+    pdf.cell(CONTENT_WIDTH, alto_es, _enc(TITULO_MAPA_ES), align="C")
+    pdf.set_xy(x, y + alto_es)
+    pdf.set_font(FUENTE, "B", FONT_MAPA_TITULO_EN)
+    pdf.cell(CONTENT_WIDTH, alto_en, _enc(TITULO_MAPA_EN), align="C")
+    pdf.set_text_color(0, 0, 0)
+
+    pdf.image(MAPA_IMAGEN, x=x, y=y + alto_es + alto_en, w=CONTENT_WIDTH)
+    return 1
+
+
 def render_indice_general(pdf, entradas):
-    """Índice general: página(s) en español y luego en inglés.
+    """Índice general: página(s) en español, luego en inglés, y detrás la
+    página del mapa político, común a los dos idiomas.
 
     Devuelve el número total de páginas que ha ocupado."""
     textos = [e[idi] for e in entradas if e for idi in ("es", "en")]
@@ -1382,6 +1469,7 @@ def render_indice_general(pdf, entradas):
     for idioma in ("es", "en"):
         paginas += _render_indice_idioma(pdf, entradas, idioma, size,
                                          w_etiqueta, w_digitos)
+    paginas += render_pagina_mapa(pdf)
     return paginas
 
 
