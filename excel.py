@@ -818,53 +818,67 @@ INDICE_PROVINCIAS = {
     "ZARAGOZA":            ("Zaragoza", "", "Zaragoza", ""),
 }
 
-# Las dos secciones finales también figuran en el índice, tras un hueco.
+# Las dos secciones finales del libro también se anuncian en el índice, en las
+# dos últimas líneas de la página.
 ENTRADAS_FINALES = [
     {
         "clave": "hoteles",
-        "es": "Nombre de los hoteles de España, por orden alfabético",
-        "en": "Names of hotels in Spain, in alphabetical order",
+        "es": "Hoteles por orden alfabético",
+        "en": "Hotels in alphabetical order",
         "pagina": None,
     },
     {
         "clave": "poblaciones",
-        "es": "Nombre de las ciudades y localidades de España, por orden alfabético",
-        "en": "Names of cities and towns in Spain, in alphabetical order",
+        "es": "Ciudades y localidades por orden alfabético",
+        "en": "Cities and towns in alphabetical order",
         "pagina": None,
     },
 ]
 
+# Rótulo de la segunda columna para Ceuta y Melilla, que no son provincias con
+# capital sino ciudades autónomas.
+ETIQUETA_CIUDAD_AUT = "Ciudad autónoma"
+
+# Provincias que no están en la Península. El índice las saca de la tabla
+# general y las agrupa por archipiélago, como en la guía impresa.
+GRUPO_INSULAR = {
+    "ISLASBALEARES":       "baleares",
+    "LASPALMAS":           "canarias",
+    "SANTACRUZDETENERIFE": "canarias",
+}
+
 
 def entrada_indice(prov):
-    """Línea del índice general (ES e EN) para una provincia del catálogo."""
+    """Fila del índice general para una provincia del catálogo.
+
+    Cada provincia es una fila de tabla: nombre en versales, capital y página.
+    El grupo ("peninsular", "baleares", "canarias" o "ciudad") decide en qué
+    sección de la página se dibuja.
+    """
     clave = normalizar_provincia(prov).replace(" ", "")
-    nombre, nombre_en, capital, tipo = INDICE_PROVINCIAS.get(
+    nombre, _nombre_en, capital, tipo = INDICE_PROVINCIAS.get(
         clave, (corregir_preposiciones(prov), "", CAPITALES.get(clave, ""), "")
     )
-    nombre_en = nombre_en or nombre
-    if tipo == "ciudad":
-        es = f"Ciudad Autónoma de {nombre}"
-        en = f"Autonomous City of {nombre_en}"
-    else:
-        es = f"Provincia de {nombre}"
-        en = f"Province of {nombre_en}"
-        if tipo == "uni":
-            es += ", Comunidad Autónoma uniprovincial"
-            en += ", single-province Autonomous Community"
-        if capital:
-            es += f", capital {capital}"
-            en += f", capital {capital}"
-    return {"provincia": prov, "es": es, "en": en, "pagina": None}
+    grupo = "ciudad" if tipo == "ciudad" else GRUPO_INSULAR.get(clave, "peninsular")
+    return {
+        "provincia": prov,
+        "nombre": nombre.upper(),
+        # Las ciudades autónomas no tienen "capital": en su sección la segunda
+        # columna explica qué son, que es lo que le interesa al lector.
+        "capital": ETIQUETA_CIUDAD_AUT if grupo == "ciudad" else capital,
+        "grupo": grupo,
+        "pagina": None,
+    }
 
 
 # Obtener lista única de provincias en orden alfabético (sin tildes)
 provincias_unicas = sorted(df["PROVINCIA"].unique().tolist(), key=normalizar_provincia)
 
-# Entradas del índice general: una por provincia, hueco, y las dos secciones
-# finales. Los diccionarios se rellenan con la página REAL tras la pasada 1;
-# como se reutilizan los mismos objetos, basta con mutarlos.
+# Entradas del índice general: una por provincia. Los diccionarios se rellenan
+# con la página REAL tras la pasada 1; como se reutilizan los mismos objetos,
+# basta con mutarlos.
 indice_provincias = [entrada_indice(prov) for prov in provincias_unicas]
-entradas_indice = indice_provincias + [None] + ENTRADAS_FINALES
+entradas_indice = indice_provincias
 
 # ---------------------------------------------------------------------------
 # ESTRATEGIA DE DOBLE RENDER (índices 100% exactos)
@@ -1231,48 +1245,62 @@ def render_secciones_finales(pdf, hotel_pages, loc_pages):
 # ---------------------------------------------------------------------------
 # ÍNDICE GENERAL DE PROVINCIAS (primeras páginas del libro)
 # ---------------------------------------------------------------------------
-# Una línea por provincia, al estilo clásico de guía:
+# Una SOLA página bilingüe, maquetada como la tabla de la guía impresa:
 #
-#   Provincia de Cantabria, Comunidad Autónoma uniprovincial, capital Santander
-#                                                            ..... pág. 135
+#   ESPAÑA PENINSULAR · PENINSULAR SPAIN
+#   PROVINCIAS · PROVINCES   CAPITALES · CAPITAL CITIES   PÁG.
+#   A CORUÑA   A Coruña     7   |   JAÉN         Jaén          271
+#   ...                          |   ...
 #
-# Primero la página en español y después la misma en inglés. El cuerpo de letra
-# se calcula solo: se busca el mayor con el que la entrada MÁS LARGA de los dos
-# idiomas sigue cabiendo en una línea, así ninguna se parte ni se recorta. El
-# alto de línea reparte las entradas por toda la mancha, para que la página
-# quede llena y equilibrada.
-TITULO_INDICE = {"es": "ÍNDICE", "en": "INDEX"}
-SUBTITULO_INDICE = {
-    "es": "Provincias y ciudades autónomas de España, sus capitales y su página",
-    "en": "Provinces and autonomous cities of Spain, their capitals and their page",
-}
-ETIQUETA_PAG = {"es": "pág.", "en": "page"}
+# Los nombres de provincia y de capital son los mismos en los dos idiomas, así
+# que no hace falta duplicar la página: basta con que los rótulos (título,
+# secciones y cabeceras de columna) vayan en español e inglés.
+#
+# Las provincias peninsulares se reparten en dos bloques, mitad y mitad, en
+# orden alfabético leyendo por columnas. Detrás van, en su propia sección, los
+# dos archipiélagos y las dos ciudades autónomas, y la página cierra con las
+# referencias a los dos índices alfabéticos del final del libro.
+#
+# Nada está medido a ojo: el cuerpo de letra sale del texto más largo que hay
+# que encajar (`_metricas_indice`) y la interlínea y los huecos entre secciones
+# reparten la altura sobrante (`_reparto_vertical`), de modo que la tabla queda
+# justificada de margen a margen y de la cabecera al pie.
+TITULO_IDX = "ÍNDICE   ·   INDEX"
+SECCION_PENINSULAR = "ESPAÑA PENINSULAR   ·   PENINSULAR SPAIN"
+SECCION_INSULAR = "ESPAÑA INSULAR   ·   INSULAR SPAIN"
+SECCION_CIUDADES = (
+    "CIUDADES AUTÓNOMAS ESPAÑOLAS EN EL NORTE DE ÁFRICA",
+    "SPANISH AUTONOMOUS CITIES IN NORTH AFRICA",
+)
+SUB_BALEARES = "Islas Baleares  ·  Balearic Islands"
+SUB_CANARIAS = "Islas Canarias  ·  Canary Islands"
+# Rótulos de las tres columnas. Van a dos líneas (español encima, inglés
+# debajo) porque en una sola no caben sin comerse la columna de al lado.
+CAB_COLUMNAS = (("PROVINCIAS", "PROVINCES"),
+                ("CAPITALES", "CAPITAL CITIES"),
+                ("PÁG.", "PAGE"))
 
 FONT_IDX_TITULO = 16
-FONT_IDX_SUBTITULO = 7.0
-FONT_IDX_MAX = 8.0      # cuerpo ideal de las entradas
-FONT_IDX_MIN = 5.0      # cuerpo mínimo antes de rendirse
-ROW_IDX_MAX = 4.8       # interlínea máxima (con pocas entradas no se desparrama)
-ROW_IDX_MIN = 3.0       # interlínea mínima antes de pasar a otra página
-ANCHO_MIN_PUNTOS = 6.0  # hueco mínimo reservado a los puntos guía
+FONT_IDX_SECCION = 8.5
+FONT_IDX_SUBSECCION = 6.2
+FONT_IDX_CABCOL_MAX = 5.2   # cabecera de columna; se encoge si no cabe
+FONT_IDX_CABCOL_MIN = 3.6
+FONT_IDX_FILA_MAX = 7.0     # cuerpo ideal de las filas
+FONT_IDX_FILA_MIN = 4.6     # cuerpo mínimo antes de rendirse
+FONT_IDX_FINAL = 6.4        # las dos líneas de los índices alfabéticos
 
+SEP_BLOQUES_IDX = 7.0       # canal entre los dos bloques de la tabla
+GAP_COL_IDX = 2.0           # aire entre provincia / capital / página
+ROW_IDX_MIN = 3.4           # interlínea mínima de una fila
+ROW_IDX_MAX = 4.9           # interlínea máxima (con pocas filas no se desparrama)
+GAP_SEC_MIN = 3.5           # hueco mínimo entre secciones
+ALTO_SECCION = 4.8          # alto de cada línea de título de sección
+ALTO_SUBSECCION = 3.8
+ALTO_CABCOL = 2.7           # por cada una de las dos líneas del rótulo
+ALTO_FINAL = 4.6            # alto de cada línea de los índices alfabéticos
+AIRE_CABECERA = 1.6         # entre el filete de una sección y lo que va debajo
 
-def _metricas_indice_general(pdf, textos):
-    """Mayor cuerpo con el que TODAS las entradas caben en una sola línea.
-
-    Devuelve (cuerpo, ancho de la etiqueta 'pág.', ancho de los dígitos). Los
-    dos anchos son fijos, así que el número de página se alinea en columna y el
-    reparto de páginas no depende de cuántas cifras tenga cada número."""
-    size = FONT_IDX_MAX
-    while True:
-        pdf.set_font(FUENTE, "", size)
-        w_digitos = pdf.get_string_width("000") + 1.0
-        w_etiqueta = max(pdf.get_string_width(_enc(e)) for e in ETIQUETA_PAG.values()) + 1.5
-        disponible = CONTENT_WIDTH - w_etiqueta - w_digitos - ANCHO_MIN_PUNTOS
-        cabe = all(pdf.get_string_width(_enc(t)) <= disponible for t in textos)
-        if cabe or size <= FONT_IDX_MIN:
-            return size, w_etiqueta, w_digitos
-        size -= 0.25
+ANCHO_BLOQUE_IDX = (CONTENT_WIDTH - SEP_BLOQUES_IDX) / 2
 
 
 def _folio_superior(pdf):
@@ -1290,90 +1318,281 @@ def _folio_superior(pdf):
         pdf.cell(15, 6, str(pdf.page_no()), align="L")
 
 
-def _cabecera_indice_general(pdf, idioma):
-    """Número de página, título, subtítulo y filete. Devuelve la Y de arranque."""
-    x = x_contenido(pdf.page_no())
-    _folio_superior(pdf)
+def _secciones_indice(entradas):
+    """Reparte las provincias en los bloques de la página.
 
-    pdf.set_xy(x, Y_TOP + 6)
-    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
-    pdf.set_text_color(*AZUL_ACENTO)
-    pdf.cell(CONTENT_WIDTH, 9, _enc(TITULO_INDICE[idioma]),
-             align="C", new_x="LEFT", new_y="NEXT")
+    Devuelve (peninsulares_izquierda, peninsulares_derecha, baleares, canarias,
+    ciudades autónomas). Las peninsulares se leen por columnas: la primera
+    mitad del alfabeto a la izquierda y la segunda a la derecha.
+    """
+    por_grupo = {"peninsular": [], "baleares": [], "canarias": [], "ciudad": []}
+    for e in entradas:
+        por_grupo[e["grupo"]].append(e)
+    pen = por_grupo["peninsular"]
+    corte = (len(pen) + 1) // 2
+    return (pen[:corte], pen[corte:], por_grupo["baleares"],
+            por_grupo["canarias"], por_grupo["ciudad"])
 
-    pdf.set_font(FUENTE, "I", FONT_IDX_SUBTITULO)
-    pdf.set_text_color(120, 120, 120)
-    pdf.cell(CONTENT_WIDTH, 4.2, _enc(SUBTITULO_INDICE[idioma]),
-             align="C", new_x="LEFT", new_y="NEXT")
 
-    y_filete = pdf.get_y() + 2.6
-    _dibujar_separador(pdf, x, CONTENT_WIDTH, y_filete, color=AZUL_ACENTO, escala=0.55)
+def _metricas_indice(pdf, bloques):
+    """Cuerpo de letra de las filas y ancho de la columna de provincias.
 
+    `bloques` es una lista de listas de filas; las que comparten columna en la
+    página van en el mismo bloque. Se busca el mayor cuerpo con el que TODAS
+    las filas caben: cada bloque conserva su propio ancho de columna de
+    provincias (Santa Cruz de Tenerife necesita bastante más que la media
+    peninsular), pero el cuerpo de letra y la caja del número de página son
+    comunes, para que la página se lea como una sola tabla.
+
+    Devuelve (cuerpo, [ancho de provincias por bloque], ancho del número).
+    """
+    size = FONT_IDX_FILA_MAX
+    while True:
+        pdf.set_font(FUENTE, "B", size)
+        w_pag = pdf.get_string_width("000") + 1.0
+        anchos, cabe = [], True
+        for filas in bloques:
+            pdf.set_font(FUENTE, "B", size)
+            w_prov = max(pdf.get_string_width(_enc(f["nombre"])) for f in filas)
+            pdf.set_font(FUENTE, "", size)
+            w_cap = max(pdf.get_string_width(_enc(f["capital"])) for f in filas)
+            anchos.append(w_prov)
+            if w_prov + w_cap + w_pag + 2 * GAP_COL_IDX > ANCHO_BLOQUE_IDX:
+                cabe = False
+        if cabe or size <= FONT_IDX_FILA_MIN:
+            return size, anchos, w_pag
+        size -= 0.1
+
+
+def _fila_indice(pdf, x, y, fila, size, row_h, w_prov, w_pag):
+    """Una fila de la tabla: PROVINCIA — capital — número de página."""
+    pdf.set_font(FUENTE, "B", size)
     pdf.set_text_color(0, 0, 0)
-    pdf.set_draw_color(0, 0, 0)
-    pdf.set_line_width(0.2)
-    return y_filete + 4.5
+    pdf.set_xy(x, y)
+    pdf.cell(w_prov, row_h, _enc(fila["nombre"]), align="L")
 
-
-def _fila_indice_general(pdf, x, y, entrada, idioma, size, row_h, w_etiqueta, w_digitos):
-    """Una línea: texto — puntos guía — 'pág.' — número (alineado a la derecha)."""
-    if entrada is None:          # hueco antes de las dos secciones finales
-        return
-    texto = _enc(entrada[idioma])
+    w_cap = ANCHO_BLOQUE_IDX - w_prov - w_pag - 2 * GAP_COL_IDX
     pdf.set_font(FUENTE, "", size)
+    pdf.set_text_color(70, 70, 70)
+    pdf.set_xy(x + w_prov + GAP_COL_IDX, y)
+    pdf.cell(w_cap, row_h, _enc(fila["capital"]), align="L")
+
+    pdf.set_font(FUENTE, "B", size)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_xy(x + ANCHO_BLOQUE_IDX - w_pag, y)
+    pdf.cell(w_pag, row_h, "" if fila["pagina"] is None else str(fila["pagina"]),
+             align="R")
+
+
+def _bloque_filas(pdf, x, y, filas, size, row_h, w_prov, w_pag):
+    """Dibuja una columna de filas y devuelve la Y del final."""
+    for fila in filas:
+        _fila_indice(pdf, x, y, fila, size, row_h, w_prov, w_pag)
+        y += row_h
+    return y
+
+
+def _titulo_seccion(pdf, x, ancho, y, lineas):
+    """Título de sección, centrado y con filete azul debajo. Devuelve la Y
+    justo bajo el filete."""
+    pdf.set_font(FUENTE, "B", FONT_IDX_SECCION)
+    pdf.set_text_color(*AZUL_ACENTO)
+    for i, linea in enumerate(lineas):
+        pdf.set_xy(x, y + i * ALTO_SECCION)
+        pdf.cell(ancho, ALTO_SECCION, _enc(linea), align="C")
+    y_filete = y + len(lineas) * ALTO_SECCION + 0.8
+    pdf.set_draw_color(*AZUL_ACENTO)
+    pdf.set_line_width(0.3)
+    pdf.line(x, y_filete, x + ancho, y_filete)
+    return y_filete
+
+
+def _cuerpo_cabecera_columnas(pdf, w_prov, w_cap):
+    """Mayor cuerpo con el que los rótulos de columna caben en su hueco.
+
+    Se mide el rótulo más largo de cada columna en los dos idiomas; basta con
+    eso porque van uno debajo del otro, no seguidos.
+    """
+    size = FONT_IDX_CABCOL_MAX
+    huecos = (w_prov + GAP_COL_IDX, w_cap)
+    while size > FONT_IDX_CABCOL_MIN:
+        pdf.set_font(FUENTE, "B", size)
+        if all(max(pdf.get_string_width(_enc(t)) for t in rotulos) <= hueco
+               for rotulos, hueco in zip(CAB_COLUMNAS[:2], huecos)):
+            return size
+        size -= 0.1
+    return FONT_IDX_CABCOL_MIN
+
+
+def _cabecera_columnas(pdf, x, y, size, w_prov, w_pag):
+    """Rótulos de las tres columnas, a dos líneas (español encima, inglés
+    debajo) y con un hairline debajo."""
+    w_cap = ANCHO_BLOQUE_IDX - w_prov - w_pag - 2 * GAP_COL_IDX
+    cajas = (
+        (x, w_prov + GAP_COL_IDX, "L"),
+        (x + w_prov + GAP_COL_IDX, w_cap, "L"),
+        (x + ANCHO_BLOQUE_IDX - w_pag, w_pag, "R"),
+    )
+    for (x_caja, ancho, alineacion), (es, en) in zip(cajas, CAB_COLUMNAS):
+        pdf.set_font(FUENTE, "B", size)
+        pdf.set_text_color(120, 120, 120)
+        pdf.set_xy(x_caja, y)
+        pdf.cell(ancho, ALTO_CABCOL, _enc(es), align=alineacion)
+        pdf.set_font(FUENTE, "I", size)
+        pdf.set_text_color(155, 155, 155)
+        pdf.set_xy(x_caja, y + ALTO_CABCOL)
+        pdf.cell(ancho, ALTO_CABCOL, _enc(en), align=alineacion)
+
+    y_linea = y + 2 * ALTO_CABCOL + 0.4
+    pdf.set_draw_color(185, 185, 185)
+    pdf.set_line_width(0.15)
+    pdf.line(x, y_linea, x + ANCHO_BLOQUE_IDX, y_linea)
+    return y_linea
+
+
+def _subtitulo_bloque(pdf, x, y, texto):
+    """Rótulo de archipiélago, sobre su columna de la sección insular."""
+    # Solo se incrustan redonda, negrita y cursiva: pedir "BI" haría que fpdf2
+    # sustituyese la fuente por la Helvetica base, que KDP no acepta.
+    pdf.set_font(FUENTE, "I", FONT_IDX_SUBSECCION)
+    pdf.set_text_color(*AZUL_ACENTO)
+    pdf.set_xy(x, y)
+    pdf.cell(ANCHO_BLOQUE_IDX, ALTO_SUBSECCION, _enc(texto), align="L")
+    return y + ALTO_SUBSECCION
+
+
+def _linea_final(pdf, x, y, entrada, w_pag):
+    """Una de las dos referencias a los índices alfabéticos del final: texto
+    bilingüe, puntos guía y número de página a la derecha."""
+    texto = _enc(entrada["es"] + "   ·   " + entrada["en"])
+    pdf.set_font(FUENTE, "", FONT_IDX_FINAL)
     pdf.set_text_color(0, 0, 0)
     pdf.set_xy(x, y)
     w_texto = pdf.get_string_width(texto)
-    pdf.cell(w_texto + 0.5, row_h, texto, align="L")
+    pdf.cell(w_texto + 0.5, ALTO_FINAL, texto, align="L")
 
-    x_etiqueta = x + CONTENT_WIDTH - w_etiqueta - w_digitos
-
-    # Puntos guía, en gris para que no pesen más que el texto
-    x_puntos = x + w_texto + 1.4
-    ancho_puntos = x_etiqueta - 1.0 - x_puntos
+    x_puntos = x + w_texto + 1.6
+    ancho_puntos = x + CONTENT_WIDTH - w_pag - 1.2 - x_puntos
     w_punto = pdf.get_string_width(".")
     if ancho_puntos > w_punto:
         pdf.set_text_color(150, 150, 150)
         pdf.set_xy(x_puntos, y)
-        pdf.cell(ancho_puntos, row_h, "." * int(ancho_puntos / w_punto), align="L")
+        pdf.cell(ancho_puntos, ALTO_FINAL, "." * int(ancho_puntos / w_punto), align="L")
 
+    pdf.set_font(FUENTE, "B", FONT_IDX_FINAL)
     pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(x_etiqueta, y)
-    pdf.cell(w_etiqueta, row_h, _enc(ETIQUETA_PAG[idioma]), align="R")
-    pdf.set_xy(x + CONTENT_WIDTH - w_digitos, y)
-    pdf.set_font(FUENTE, "B", size)
-    pdf.cell(w_digitos, row_h,
-             "" if entrada["pagina"] is None else str(entrada["pagina"]), align="R")
+    pdf.set_xy(x + CONTENT_WIDTH - w_pag, y)
+    pdf.cell(w_pag, ALTO_FINAL, "" if entrada["pagina"] is None
+             else str(entrada["pagina"]), align="R")
+    return y + ALTO_FINAL
 
 
-def _render_indice_idioma(pdf, entradas, idioma, size, w_etiqueta, w_digitos):
-    """Dibuja el índice completo en un idioma. Devuelve las páginas que ocupa."""
+def _reparto_vertical(disponible, n_filas, fijo, n_huecos):
+    """Interlínea y hueco entre secciones que llenan la página.
+
+    `fijo` es todo lo que no se puede estirar (títulos, filetes, rótulos).
+    La altura que sobra va PRIMERO a la interlínea, hasta ROW_IDX_MAX: airear
+    las filas se nota en toda la tabla, mientras que un hueco enorme entre
+    secciones solo abre agujeros. Lo que aún sobre se reparte entre los huecos,
+    que son los que marcan la estructura.
+    """
+    base = fijo + n_filas * ROW_IDX_MIN + n_huecos * GAP_SEC_MIN
+    sobra = disponible - base
+    if sobra <= 0:
+        return ROW_IDX_MIN, GAP_SEC_MIN
+    row_h = min(ROW_IDX_MAX, ROW_IDX_MIN + sobra / n_filas)
+    resto = disponible - (fijo + n_filas * row_h + n_huecos * GAP_SEC_MIN)
+    return row_h, GAP_SEC_MIN + max(0.0, resto) / n_huecos
+
+
+def render_pagina_indice(pdf, entradas):
+    """Dibuja la página del índice general. Devuelve las páginas ocupadas (1)."""
     pdf.provincia_actual = None
     pdf.provincia_continuacion = False
-    pdf.pie_forzado = False      # el número va arriba, no al pie
+    pdf.pie_forzado = False          # el número va arriba, no al pie
     pdf.add_page()
-    y = _cabecera_indice_general(pdf, idioma)
+    _folio_superior(pdf)
 
-    disponible = Y_LIMIT - y
-    por_pagina = max(1, int(disponible // ROW_IDX_MIN))
-    if len(entradas) <= por_pagina:
-        # Cabe entero: se reparte por toda la mancha (sin pasarse de ROW_IDX_MAX)
-        row_h = min(ROW_IDX_MAX, disponible / max(1, len(entradas)))
-    else:
-        row_h = ROW_IDX_MIN
+    izq, der, baleares, canarias, ciudades = _secciones_indice(entradas)
+    # Los dos archipiélagos van juntos en la medición: comparten columna de
+    # provincias para que las dos mitades de la sección insular queden
+    # alineadas entre sí, así que también tienen que caber juntos (la columna
+    # la marca Santa Cruz de Tenerife y la capital más larga, Las Palmas de
+    # Gran Canaria, está en la otra mitad).
+    size, (w_pen, w_isla, w_ciu), w_pag = _metricas_indice(
+        pdf, [izq + der, baleares + canarias, ciudades]
+    )
 
-    paginas = 1
     x = x_contenido(pdf.page_no())
-    for entrada in entradas:
-        if y + row_h > Y_LIMIT + 0.01:
-            pdf.add_page()
-            paginas += 1
-            y = _cabecera_indice_general(pdf, idioma)
-            x = x_contenido(pdf.page_no())
-        _fila_indice_general(pdf, x, y, entrada, idioma, size, row_h,
-                             w_etiqueta, w_digitos)
-        y += row_h
-    return paginas
+    x_der = x + ANCHO_BLOQUE_IDX + SEP_BLOQUES_IDX
+
+    # --- Cabecera: título bilingüe y separador de rombo, como las portadas ---
+    y = Y_TOP + 6.0
+    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
+    pdf.set_text_color(*AZUL_ACENTO)
+    pdf.set_xy(x, y)
+    pdf.cell(CONTENT_WIDTH, 9.0, _enc(TITULO_IDX), align="C")
+    y += 9.0 + 2.2
+    _dibujar_separador(pdf, x, CONTENT_WIDTH, y, color=AZUL_ACENTO, escala=0.55)
+    y_inicio = y + 3.5
+
+    # --- Altura: lo que no se estira, para repartir el resto entre filas y huecos
+    n_filas = (max(len(izq), len(der))
+               + max(len(baleares), len(canarias))
+               + (len(ciudades) + 1) // 2)
+    alto_cabcol = 2 * ALTO_CABCOL + 0.4 + AIRE_CABECERA
+    fijo = (
+        (ALTO_SECCION + 0.8 + AIRE_CABECERA + alto_cabcol)                 # peninsular
+        + (ALTO_SECCION + 0.8 + AIRE_CABECERA + ALTO_SUBSECCION)           # insular
+        + (2 * ALTO_SECCION + 0.8 + AIRE_CABECERA)                         # ciudades
+        + (0.8 + AIRE_CABECERA + 2 * ALTO_FINAL)                           # cierre
+    )
+    row_h, gap = _reparto_vertical(Y_LIMIT - y_inicio, n_filas, fijo, 3)
+
+    cab_size = _cuerpo_cabecera_columnas(
+        pdf, w_pen, ANCHO_BLOQUE_IDX - w_pen - w_pag - 2 * GAP_COL_IDX)
+
+    # --- España peninsular: dos medias tablas gemelas ---
+    y = _titulo_seccion(pdf, x, CONTENT_WIDTH, y_inicio, [SECCION_PENINSULAR])
+    y += AIRE_CABECERA
+    _cabecera_columnas(pdf, x, y, cab_size, w_pen, w_pag)
+    y = _cabecera_columnas(pdf, x_der, y, cab_size, w_pen, w_pag) + AIRE_CABECERA
+    y_fin = max(
+        _bloque_filas(pdf, x, y, izq, size, row_h, w_pen, w_pag),
+        _bloque_filas(pdf, x_der, y, der, size, row_h, w_pen, w_pag),
+    )
+
+    # --- España insular: un archipiélago en cada media tabla ---
+    y = _titulo_seccion(pdf, x, CONTENT_WIDTH, y_fin + gap, [SECCION_INSULAR])
+    y += AIRE_CABECERA
+    _subtitulo_bloque(pdf, x, y, SUB_BALEARES)
+    y = _subtitulo_bloque(pdf, x_der, y, SUB_CANARIAS)
+    y_fin = max(
+        _bloque_filas(pdf, x, y, baleares, size, row_h, w_isla, w_pag),
+        _bloque_filas(pdf, x_der, y, canarias, size, row_h, w_isla, w_pag),
+    )
+
+    # --- Ciudades autónomas: Ceuta a la izquierda, Melilla a la derecha ---
+    y = _titulo_seccion(pdf, x, CONTENT_WIDTH, y_fin + gap, list(SECCION_CIUDADES))
+    y += AIRE_CABECERA
+    for i, ciudad in enumerate(ciudades):
+        _fila_indice(pdf, x if i % 2 == 0 else x_der, y + (i // 2) * row_h,
+                     ciudad, size, row_h, w_ciu, w_pag)
+    y_fin = y + ((len(ciudades) + 1) // 2) * row_h
+
+    # --- Índices alfabéticos del final del libro ---
+    y = y_fin + gap + 0.8
+    pdf.set_draw_color(*AZUL_ACENTO)
+    pdf.set_line_width(0.3)
+    pdf.line(x, y, x + CONTENT_WIDTH, y)
+    y += AIRE_CABECERA
+    for entrada in ENTRADAS_FINALES:
+        y = _linea_final(pdf, x, y, entrada, w_pag)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(0.2)
+    return 1
 
 
 # ---------------------------------------------------------------------------
@@ -1458,19 +1677,86 @@ def render_pagina_mapa(pdf):
     return 1
 
 
-def render_indice_general(pdf, entradas):
-    """Índice general: página(s) en español, luego en inglés, y detrás la
-    página del mapa político, común a los dos idiomas.
+# ---------------------------------------------------------------------------
+# PÁGINA DE NOTICIAS DE INTERÉS
+# ---------------------------------------------------------------------------
+# Página reservada: de momento solo anuncia para qué servirá, y a partir de la
+# edición de octubre de 2026 se llenará con las noticias del sector.
+TITULO_NOTICIAS_ES = "NOTICIAS DE INTERÉS"
+TITULO_NOTICIAS_EN = "NEWS OF INTEREST"
+TEXTO_NOTICIAS_ES = (
+    "Página reservada para noticias referentes al sector hotelero, en especial "
+    "los proyectos de nuevos hoteles con sus características, ubicación y fecha "
+    "aproximada de apertura, si la empresa propietaria autoriza su publicación. "
+    "Así como las bajas que se produzcan en los hoteles por el cese de su "
+    "actividad o cierre temporal por obras."
+)
+TEXTO_NOTICIAS_EN = (
+    "Page reserved for news related to the hotel sector, especially new hotel "
+    "projects with their characteristics, location, and approximate opening "
+    "date, provided that the owning company authorizes its publication. As well "
+    "as any removals of hotels from the listings due to the cessation of their "
+    "activity or temporary closure for construction works."
+)
 
-    Devuelve el número total de páginas que ha ocupado."""
-    textos = [e[idi] for e in entradas if e for idi in ("es", "en")]
-    size, w_etiqueta, w_digitos = _metricas_indice_general(pdf, textos)
-    paginas = 0
-    for idioma in ("es", "en"):
-        paginas += _render_indice_idioma(pdf, entradas, idioma, size,
-                                         w_etiqueta, w_digitos)
-    paginas += render_pagina_mapa(pdf)
-    return paginas
+FONT_NOTICIAS = 10.0        # cuerpo de los dos párrafos
+LINEA_NOTICIAS = 5.2        # interlínea de los párrafos
+SANGRADO_NOTICIAS = 6.0     # estrecha la caja: una línea muy larga no se lee
+SEP_NOTICIAS = 7.0          # entre el párrafo español y el inglés
+
+
+def render_pagina_noticias(pdf):
+    """Página de noticias, detrás del mapa. Bilingüe y en una sola hoja.
+
+    El título va arriba, a la altura del del índice, y NO centrado en la
+    página: esta es una página reservada que se irá llenando de noticias a
+    partir de la edición de octubre de 2026, y las noticias entrarán por
+    debajo del anuncio, así que el blanco tiene que quedar al pie.
+    """
+    pdf.provincia_actual = None
+    pdf.provincia_continuacion = False
+    pdf.pie_forzado = False          # el número va arriba, como en el índice
+    pdf.add_page()
+    _folio_superior(pdf)
+
+    x = x_contenido(pdf.page_no()) + SANGRADO_NOTICIAS
+    ancho = CONTENT_WIDTH - 2 * SANGRADO_NOTICIAS
+    alto_es, alto_en = 9.0, 6.0
+    alto_separador = 6.0
+    y = Y_TOP + 6.0
+
+    # Mismo cuerpo, color y negrita que el título del índice y el del mapa,
+    # para que los preliminares se lean como un conjunto
+    pdf.set_text_color(*AZUL_ACENTO)
+    pdf.set_xy(x, y)
+    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
+    pdf.cell(ancho, alto_es, _enc(TITULO_NOTICIAS_ES), align="C")
+    pdf.set_xy(x, y + alto_es)
+    pdf.set_font(FUENTE, "B", FONT_MAPA_TITULO_EN)
+    pdf.cell(ancho, alto_en, _enc(TITULO_NOTICIAS_EN), align="C")
+
+    y += alto_es + alto_en + alto_separador / 2
+    _dibujar_separador(pdf, x, ancho, y, color=AZUL_ACENTO, escala=0.55)
+    y += alto_separador / 2
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font(FUENTE, "", FONT_NOTICIAS)
+    for texto in (TEXTO_NOTICIAS_ES, TEXTO_NOTICIAS_EN):
+        pdf.set_xy(x, y)
+        pdf.multi_cell(ancho, LINEA_NOTICIAS, _enc(texto), align="J",
+                       new_x="LEFT", new_y="NEXT")
+        y = pdf.get_y() + SEP_NOTICIAS
+    return 1
+
+
+def render_indice_general(pdf, entradas):
+    """Preliminares del libro: la página bilingüe de provincias, la del mapa
+    político y la de noticias de interés.
+
+    Devuelve el número total de páginas que han ocupado."""
+    return (render_pagina_indice(pdf, entradas)
+            + render_pagina_mapa(pdf)
+            + render_pagina_noticias(pdf))
 
 
 # ---- Cuántas páginas ocupa el índice general (se necesita ANTES de medir) ----
@@ -1579,6 +1865,6 @@ print(f"PDF generado: {PDF_FILE} - {pdf.page_no()} páginas, "
       f"{PAGE_WIDTH:.2f} x {PAGE_HEIGHT:.2f} mm "
       f"({PAGE_WIDTH / 25.4:.3f}\" x {PAGE_HEIGHT / 25.4:.3f}\") "
       f"{'CON sangrado' if CON_SANGRADO else 'SIN sangrado'}")
-print(f"Índice general: {N_PAGINAS_INDICE} páginas (español + inglés). "
+print(f"Preliminares: {N_PAGINAS_INDICE} páginas (índice bilingüe, mapa y noticias). "
       f"Catálogo desde la {min(prov_pages_final.values())}, "
       f"hoteles A-Z en la {pag_hoteles}, poblaciones A-Z en la {pag_poblaciones}.")
