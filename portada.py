@@ -1,7 +1,7 @@
 """Genera la cubierta completa (contraportada + lomo + portada) para KDP.
 
 Medidas tomadas del calculador oficial de KDP para:
-    tapa blanda | tinta blanco y negro | papel blanco | 6" x 9" | 526 paginas
+    tapa blanda | tinta blanco y negro | papel blanco | 6" x 9" | 524 paginas
 
     Portada completa ....... 341,12 x 234,95 mm
     Portada / contraportada  152,40 x 228,60 mm cada una
@@ -26,7 +26,7 @@ from fpdf import FPDF
 # ---------------------------------------------------------------------------
 # PARAMETROS DEL LIBRO
 # ---------------------------------------------------------------------------
-PAGINAS = 526
+PAGINAS = 524
 # Debe coincidir EXACTAMENTE con "Tinta y tipo de papel" en KDP: cada opcion
 # tiene un grosor de hoja distinto y por tanto un lomo distinto.
 PAPEL = "color_estandar"      # negro_blanco | negro_crema | color_estandar | color_premium
@@ -72,9 +72,9 @@ FUENTES = {
     ("serif", "BI"): "C:/Windows/Fonts/timesbi.ttf",
 }
 
-AZUL = (26, 42, 88)        # azul marino de los titulos
 GRIS = (60, 60, 60)        # texto corrido de la contraportada
 NEGRO = (0, 0, 0)
+BEIGE = (219, 205, 174)    # beige de la cubierta
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +83,13 @@ NEGRO = (0, 0, 0)
 MARCA = "QualitHotelsBook"
 TITULO_ES = "GUIA DE HOTELES DE ESPAÑA"
 TITULO_EN = "SPAIN HOTELS GUIDE"
-FECHA = "Septiembre 2026"
+FECHA = "Octubre 2026"
 
 CONTRA_ES = [
     ("p", "Contiene el nombre, dirección y datos principales de los hoteles "
-          "existentes en España. Para la obtención de los datos se han utilizado "
-          "fuentes de dominio público y las páginas web de los propios hoteles."),
+          "existentes en España, permitiendo su rápida localización y contacto "
+          "telefónico. Para la obtención de los datos se han utilizado fuentes "
+          "de dominio público y las páginas web de los propios hoteles."),
     ("h", "VENTAJAS DE ESTA GUÍA:"),
     ("d", ("Seguridad: ", "los establecimientos que aparecen en la misma disponen "
            "del Código de Registro Oficial que acredita su legalidad para el "
@@ -98,9 +99,10 @@ CONTRA_ES = [
 ]
 
 CONTRA_EN = [
-    ("p", "This guide contains the names, addresses, and key information of hotels "
-          "located throughout Spain. The information has been compiled using "
-          "publicly available sources and the websites of the hotels themselves."),
+    ("p", "Contains the name, address and main details of the hotels in Spain, "
+          "allowing for quick location and telephone contact. The information has "
+          "been compiled using publicly available sources and the websites of the "
+          "hotels themselves."),
     ("h", "ADVANTAGES OF THIS GUIDE:"),
     ("d", ("Security: ", "All establishments included in this guide have an Official "
            "Registration Code, certifying that they are legally authorized to "
@@ -124,8 +126,34 @@ EDITORIAL = [
 # ---------------------------------------------------------------------------
 # MAPA: el SVG lleva dentro un PNG en base64; lo extraemos a un fichero temporal
 # ---------------------------------------------------------------------------
-def extraer_mapa(ruta_svg):
-    """Devuelve (ruta_png, ancho_px, alto_px) del mapa incrustado en el SVG."""
+UMBRAL_CONTORNO = 150      # por encima de esta luminancia no se toca el pixel
+
+
+def _oscurecer_contornos(img):
+    """Lleva a negro las lineas del mapa.
+
+    El PNG incrustado dibuja los limites de provincia en un gris pardo (85,
+    55, 56 de media), que sobre el fondo de la cubierta se desdibuja. Se hunde
+    el extremo oscuro de la imagen y se dejan intactos los rellenos de las
+    provincias, que estan muy por encima del umbral.
+    """
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(img).astype(np.float32)
+    rgb = a[..., :3]
+    lum = rgb.mean(axis=2, keepdims=True)
+    a[..., :3] = rgb * np.clip(lum / UMBRAL_CONTORNO, 0.0, 1.0)
+    return Image.fromarray(a.astype("uint8"), "RGBA")
+
+
+def extraer_mapa(ruta_svg, fondo_rgb=BEIGE):
+    """Devuelve (ruta_png, ancho_px, alto_px, offset) del mapa del SVG.
+
+    El PNG incrustado tiene transparencia, pero fpdf2 lo pinta opaco, así que
+    hay que aplanarlo aquí. Se aplana sobre el color de fondo de la cubierta,
+    no sobre blanco: si no, el mapa dejaría un recuadro blanco sobre el beige.
+    """
     from PIL import Image
 
     svg = io.open(ruta_svg, encoding="utf-8", errors="replace").read()
@@ -134,10 +162,9 @@ def extraer_mapa(ruta_svg):
         raise RuntimeError(f"No hay imagen incrustada en {ruta_svg}")
     img = Image.open(io.BytesIO(base64.b64decode(m.group(2))))
     if img.mode in ("RGBA", "LA", "P"):
-        fondo = Image.new("RGB", img.size, (255, 255, 255))
-        img = img.convert("RGBA")
-        fondo.paste(img, mask=img.split()[-1])
-        img = fondo
+        # Se conserva el canal alfa: si se aplanara, la CAJA de la imagen
+        # taparia la linea de la fecha, que queda justo encima del mapa.
+        img = _oscurecer_contornos(img.convert("RGBA"))
     destino = "_mapa_portada.png"
     img.save(destino)
     # El mapa tiene una franja clara en la parte superior (mar). Medimos donde
@@ -162,7 +189,9 @@ PORTADA = {
     "titulo_es": dict(texto=TITULO_ES, estilo="B",  cap_top=34.92, ancho=122.57),
     "titulo_en": dict(texto=TITULO_EN, estilo="B",  cap_top=50.98, ancho=116.55),
     "fecha":     dict(texto=FECHA, estilo="BI", cap_top=66.81, ancho=43.90),
-    "mapa":      dict(top=84.25, ancho=128.40),
+    # 144 mm es practicamente el techo: el margen de seguridad deja 146.05 y
+    # el PNG del SVG (1728 px) baja de los 300 ppp que pide KDP a partir de 146.
+    "mapa":      dict(top=82.00, ancho=144.00),
 }
 
 # El titulo en ingles es mas corto pero en el original ocupa casi lo mismo:
@@ -200,7 +229,8 @@ def linea_portada(pdf, cx, cap_top, texto, estilo, size, ancho_objetivo,
     base = cap_top + CAP_TIMES * size / 72 * MM        # linea de base
     w = _ancho(pdf, texto, estilo, size, tracking, sufijo)
     x = cx - w / 2
-    pdf.set_text_color(*AZUL)
+    # Portada y lomo van en negro sobre el marron de la cubierta
+    pdf.set_text_color(*NEGRO)
     if tracking:
         # OJO: set_char_spacing espera PUNTOS, no las unidades del documento.
         pdf.set_char_spacing(tracking / MM * 72)
@@ -283,8 +313,8 @@ def construir():
     pdf = Cubierta()
     pdf.add_page()
 
-    # Fondo blanco en TODA la hoja, sangrado incluido
-    pdf.set_fill_color(255, 255, 255)
+    # Fondo beige en TODA la hoja, sangrado incluido
+    pdf.set_fill_color(*BEIGE)
     pdf.rect(0, 0, PAGE_W, PAGE_H, "F")
 
     # ---------------- CONTRAPORTADA ----------------
@@ -333,7 +363,7 @@ def construir():
     largo_util = TRIM_H - 2 * SEGURIDAD          # 222.25 mm
     with pdf.rotation(-90, cx, cy):
         pdf.set_font("serif", "B", 12)
-        pdf.set_text_color(*AZUL)
+        pdf.set_text_color(*NEGRO)
         pdf.set_xy(cx - largo_util / 2, cy - 4)
         pdf.cell(largo_util, 8, lomo_txt, align="C")
 
