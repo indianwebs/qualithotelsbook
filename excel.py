@@ -1265,42 +1265,58 @@ def render_secciones_finales(pdf, hotel_pages, loc_pages):
 # que encajar (`_metricas_indice`) y la interlínea y los huecos entre secciones
 # reparten la altura sobrante (`_reparto_vertical`), de modo que la tabla queda
 # justificada de margen a margen y de la cabecera al pie.
-TITULO_IDX = "ÍNDICE   ·   INDEX"
-SECCION_PENINSULAR = "ESPAÑA PENINSULAR   ·   PENINSULAR SPAIN"
-SECCION_INSULAR = "ESPAÑA INSULAR   ·   INSULAR SPAIN"
+SEPARADOR_BILINGUE = "   -   "
+TITULO_IDX = "ÍNDICE" + SEPARADOR_BILINGUE + "INDEX"
+SECCION_PENINSULAR = "ESPAÑA PENINSULAR" + SEPARADOR_BILINGUE + "PENINSULAR SPAIN"
+SECCION_INSULAR = "ESPAÑA INSULAR" + SEPARADOR_BILINGUE + "INSULAR SPAIN"
 SECCION_CIUDADES = (
     "CIUDADES AUTÓNOMAS ESPAÑOLAS EN EL NORTE DE ÁFRICA",
     "SPANISH AUTONOMOUS CITIES IN NORTH AFRICA",
 )
-SUB_BALEARES = "Islas Baleares  ·  Balearic Islands"
-SUB_CANARIAS = "Islas Canarias  ·  Canary Islands"
-# Rótulos de las tres columnas. Van a dos líneas (español encima, inglés
-# debajo) porque en una sola no caben sin comerse la columna de al lado.
-CAB_COLUMNAS = (("PROVINCIAS", "PROVINCES"),
-                ("CAPITALES", "CAPITAL CITIES"),
-                ("PÁG.", "PAGE"))
+SUB_BALEARES = "Islas Baleares  -  Balearic Islands"
+SUB_CANARIAS = "Islas Canarias  -  Canary Islands"
+# Rótulos de las tres columnas: los dos idiomas van seguidos dentro de la misma
+# celda, como en la hoja de cálculo. El de páginas se queda en español, que se
+# entiende en los dos y la celda es estrecha.
+CAB_PROVINCIAS = ("PROVINCIAS", "PROVINCES")
+CAB_CAPITALES = ("CAPITALES", "CAPITAL CITIES")
+CAB_PAGINA = "PÁG."
 
 FONT_IDX_TITULO = 16
 FONT_IDX_SECCION = 8.5
-FONT_IDX_SUBSECCION = 6.2
+FONT_IDX_SUBSECCION = 6.5
 FONT_IDX_CABCOL_MAX = 5.2   # cabecera de columna; se encoge si no cabe
 FONT_IDX_CABCOL_MIN = 3.6
 FONT_IDX_FILA_MAX = 7.0     # cuerpo ideal de las filas
 FONT_IDX_FILA_MIN = 4.6     # cuerpo mínimo antes de rendirse
 FONT_IDX_FINAL = 6.4        # las dos líneas de los índices alfabéticos
 
-SEP_BLOQUES_IDX = 7.0       # canal entre los dos bloques de la tabla
-GAP_COL_IDX = 2.0           # aire entre provincia / capital / página
+SEP_BLOQUES_IDX = 7.0       # canal entre las dos tablas de una sección
+PAD_CELDA = 2.0             # aire MINIMO entre el texto y el filete
 ROW_IDX_MIN = 3.4           # interlínea mínima de una fila
 ROW_IDX_MAX = 4.9           # interlínea máxima (con pocas filas no se desparrama)
 GAP_SEC_MIN = 3.5           # hueco mínimo entre secciones
-ALTO_SECCION = 4.8          # alto de cada línea de título de sección
-ALTO_SUBSECCION = 3.8
-ALTO_CABCOL = 2.7           # por cada una de las dos líneas del rótulo
+ALTO_TITULO = 10.5          # alto de la línea del título
+ALTO_ROTULO = 5.0           # alto de cada línea de rótulo de sección
+ALTO_CABLINEA = 2.9         # cada uno de los dos idiomas del rótulo
+ALTO_CABCOL = 2 * ALTO_CABLINEA
 ALTO_FINAL = 4.6            # alto de cada línea de los índices alfabéticos
-AIRE_CABECERA = 1.6         # entre el filete de una sección y lo que va debajo
+AIRE_TITULO = 4.0           # entre el recuadro del título y la primera sección
+AIRE_ROTULO = 0.8           # entre un rótulo y la tabla que encabeza
 
 ANCHO_BLOQUE_IDX = (CONTENT_WIDTH - SEP_BLOQUES_IDX) / 2
+
+
+# La tabla va en negro y gris, como la hoja de cálculo: el azul se reserva
+# para el título y los rótulos de sección. Al no depender de AZUL_ACENTO,
+# estos colores son ya los mismos en el modo "color" y en el "bn".
+NEGRO_REJILLA = (0, 0, 0)                   # rayas de la rejilla
+GRIS_CABECERA = (232, 232, 232)             # fondo de la fila de rótulos
+TINTA_PROVINCIA = (25, 25, 25)              # versales y números, casi negro
+TINTA_CAPITAL = (55, 55, 55)                # nombre de la capital
+TINTA_SECCION = (0, 0, 0)                   # rótulos de sección de la página
+TINTA_ROTULO = (30, 30, 30)                 # rótulo de columna en español
+TINTA_ROTULO_EN = (95, 95, 95)              # su traducción, un punto más floja
 
 
 def _folio_superior(pdf):
@@ -1334,163 +1350,238 @@ def _secciones_indice(entradas):
             por_grupo["canarias"], por_grupo["ciudad"])
 
 
-def _metricas_indice(pdf, bloques):
-    """Cuerpo de letra de las filas y ancho de la columna de provincias.
-
-    `bloques` es una lista de listas de filas; las que comparten columna en la
-    página van en el mismo bloque. Se busca el mayor cuerpo con el que TODAS
-    las filas caben: cada bloque conserva su propio ancho de columna de
-    provincias (Santa Cruz de Tenerife necesita bastante más que la media
-    peninsular), pero el cuerpo de letra y la caja del número de página son
-    comunes, para que la página se lea como una sola tabla.
-
-    Devuelve (cuerpo, [ancho de provincias por bloque], ancho del número).
-    """
-    size = FONT_IDX_FILA_MAX
-    while True:
-        pdf.set_font(FUENTE, "B", size)
-        w_pag = pdf.get_string_width("000") + 1.0
-        anchos, cabe = [], True
-        for filas in bloques:
-            pdf.set_font(FUENTE, "B", size)
-            w_prov = max(pdf.get_string_width(_enc(f["nombre"])) for f in filas)
-            pdf.set_font(FUENTE, "", size)
-            w_cap = max(pdf.get_string_width(_enc(f["capital"])) for f in filas)
-            anchos.append(w_prov)
-            if w_prov + w_cap + w_pag + 2 * GAP_COL_IDX > ANCHO_BLOQUE_IDX:
-                cabe = False
-        if cabe or size <= FONT_IDX_FILA_MIN:
-            return size, anchos, w_pag
-        size -= 0.1
-
-
-def _fila_indice(pdf, x, y, fila, size, row_h, w_prov, w_pag):
-    """Una fila de la tabla: PROVINCIA — capital — número de página."""
+def _ancho_necesario(pdf, filas, size):
+    """Ancho que piden las dos columnas de texto de una tabla a ese cuerpo,
+    con el sangrado de sus celdas ya incluido."""
     pdf.set_font(FUENTE, "B", size)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(x, y)
-    pdf.cell(w_prov, row_h, _enc(fila["nombre"]), align="L")
-
-    w_cap = ANCHO_BLOQUE_IDX - w_prov - w_pag - 2 * GAP_COL_IDX
+    w_prov = max(pdf.get_string_width(_enc(f["nombre"])) for f in filas)
     pdf.set_font(FUENTE, "", size)
-    pdf.set_text_color(70, 70, 70)
-    pdf.set_xy(x + w_prov + GAP_COL_IDX, y)
-    pdf.cell(w_cap, row_h, _enc(fila["capital"]), align="L")
+    w_cap = max(pdf.get_string_width(_enc(f["capital"])) for f in filas)
+    return w_prov + w_cap + 4 * PAD_CELDA
+
+
+def _ancho_pagina(pdf):
+    """Ancho de la celda del número, común a todas las tablas para que la
+    última columna caiga siempre a la misma distancia del filete."""
+    pdf.set_font(FUENTE, "B", FONT_IDX_FILA_MAX)
+    return pdf.get_string_width("000") + 2 * PAD_CELDA
+
+
+def _cuerpo_bloque(pdf, filas, ancho, w_pag):
+    """Mayor cuerpo con el que las filas de una tabla caben en `ancho`."""
+    size = FONT_IDX_FILA_MAX
+    while size > FONT_IDX_FILA_MIN:
+        if _ancho_necesario(pdf, filas, size) + w_pag <= ancho:
+            return size
+        size -= 0.1
+    return FONT_IDX_FILA_MIN
+
+
+def _reparto_ancho(pdf, bloques, disponible, size_ref, w_pag):
+    """Reparte el ancho entre dos tablas que van lado a lado.
+
+    No a partes iguales, sino en proporción a lo que pide cada una: en la
+    sección insular, Canarias tiene los dos nombres más largos de la página
+    (Santa Cruz de Tenerife y Las Palmas de Gran Canaria) y Baleares apenas
+    necesita la mitad. Partir por el medio obligaría a las dos a bajar a un
+    cuerpo de letra ridículo para que entrara la peor.
+
+    La columna de páginas se reserva ANTES de repartir: mide lo mismo en las
+    dos tablas, así que repartirla en proporción al texto se la comería a la
+    tabla pequeña, que es justo la que menos margen tiene.
+    """
+    necesidades = [_ancho_necesario(pdf, filas, size_ref) for filas in bloques]
+    resto = disponible - len(bloques) * w_pag
+    total = sum(necesidades)
+    return [w_pag + resto * n / total for n in necesidades]
+
+
+def _ancho_provincia(pdf, filas, size, ancho, w_pag):
+    """Ancho de la celda de provincias, con su parte del aire que sobra.
+
+    Si la celda se ajustara justo al nombre más largo, ese nombre
+    (GUADALAJARA, SANTA CRUZ DE TENERIFE...) quedaría pegado al filete
+    mientras el resto de la columna va holgado. El ancho sobrante se reparte a
+    partes iguales entre las dos columnas de texto.
+    """
+    pdf.set_font(FUENTE, "B", size)
+    w_prov = max(pdf.get_string_width(_enc(f["nombre"])) for f in filas)
+    pdf.set_font(FUENTE, "", size)
+    w_cap = max(pdf.get_string_width(_enc(f["capital"])) for f in filas)
+    sobra = ancho - w_pag - w_prov - w_cap - 4 * PAD_CELDA
+    return w_prov + 2 * PAD_CELDA + max(0.0, sobra) / 2
+
+
+def _rejilla_tabla(pdf, x, y, ancho, alto_cab, n_filas, row_h, w_prov, w_pag):
+    """Rejilla de una tabla: contorno, una horizontal por fila y las dos
+    verticales que separan las tres columnas.
+
+    Es la cuadrícula literal de la hoja de cálculo: todas las celdas cerradas,
+    no solo el contorno. Se dibuja DESPUÉS del texto para que ninguna línea
+    quede tapada por el relleno de la cabecera.
+    """
+    alto = alto_cab + n_filas * row_h
+    pdf.set_draw_color(*NEGRO_REJILLA)
+    pdf.set_line_width(0.15)
+    pdf.rect(x, y, ancho, alto)
+    for i in range(n_filas):
+        y_linea = y + alto_cab + i * row_h
+        pdf.line(x, y_linea, x + ancho, y_linea)
+    for x_linea in (x + w_prov, x + ancho - w_pag):
+        pdf.line(x_linea, y, x_linea, y + alto)
+
+
+def _fila_indice(pdf, x, y, ancho, fila, size, row_h, w_prov, w_pag):
+    """Una fila de la tabla: PROVINCIA | capital | página, celda a celda."""
+    pdf.set_font(FUENTE, "B", size)
+    pdf.set_text_color(*TINTA_PROVINCIA)
+    pdf.set_xy(x + PAD_CELDA, y)
+    pdf.cell(w_prov - 2 * PAD_CELDA, row_h, _enc(fila["nombre"]), align="L")
+
+    pdf.set_font(FUENTE, "", size)
+    pdf.set_text_color(*TINTA_CAPITAL)
+    pdf.set_xy(x + w_prov + PAD_CELDA, y)
+    pdf.cell(ancho - w_prov - w_pag - 2 * PAD_CELDA, row_h,
+             _enc(fila["capital"]), align="L")
 
     pdf.set_font(FUENTE, "B", size)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(x + ANCHO_BLOQUE_IDX - w_pag, y)
-    pdf.cell(w_pag, row_h, "" if fila["pagina"] is None else str(fila["pagina"]),
-             align="R")
-
-
-def _bloque_filas(pdf, x, y, filas, size, row_h, w_prov, w_pag):
-    """Dibuja una columna de filas y devuelve la Y del final."""
-    for fila in filas:
-        _fila_indice(pdf, x, y, fila, size, row_h, w_prov, w_pag)
-        y += row_h
-    return y
-
-
-def _titulo_seccion(pdf, x, ancho, y, lineas):
-    """Título de sección, centrado y con filete azul debajo. Devuelve la Y
-    justo bajo el filete."""
-    pdf.set_font(FUENTE, "B", FONT_IDX_SECCION)
-    pdf.set_text_color(*AZUL_ACENTO)
-    for i, linea in enumerate(lineas):
-        pdf.set_xy(x, y + i * ALTO_SECCION)
-        pdf.cell(ancho, ALTO_SECCION, _enc(linea), align="C")
-    y_filete = y + len(lineas) * ALTO_SECCION + 0.8
-    pdf.set_draw_color(*AZUL_ACENTO)
-    pdf.set_line_width(0.3)
-    pdf.line(x, y_filete, x + ancho, y_filete)
-    return y_filete
+    pdf.set_text_color(*TINTA_PROVINCIA)
+    pdf.set_xy(x + ancho - w_pag, y)
+    pdf.cell(w_pag, row_h,
+             "" if fila["pagina"] is None else str(fila["pagina"]), align="C")
 
 
 def _cuerpo_cabecera_columnas(pdf, w_prov, w_cap):
-    """Mayor cuerpo con el que los rótulos de columna caben en su hueco.
+    """Mayor cuerpo con el que los rótulos caben en su celda.
 
-    Se mide el rótulo más largo de cada columna en los dos idiomas; basta con
-    eso porque van uno debajo del otro, no seguidos.
+    Los dos idiomas van uno DEBAJO del otro dentro de la misma celda: en la
+    hoja de cálculo caben seguidos porque la columna es ancha, pero aquí la de
+    provincias mide 15 mm y "PROVINCIAS PROVINCES" seguido no entra ni al
+    cuerpo mínimo legible.
     """
     size = FONT_IDX_CABCOL_MAX
-    huecos = (w_prov + GAP_COL_IDX, w_cap)
+    huecos = (w_prov - 2 * PAD_CELDA, w_cap - 2 * PAD_CELDA)
     while size > FONT_IDX_CABCOL_MIN:
         pdf.set_font(FUENTE, "B", size)
         if all(max(pdf.get_string_width(_enc(t)) for t in rotulos) <= hueco
-               for rotulos, hueco in zip(CAB_COLUMNAS[:2], huecos)):
+               for rotulos, hueco in zip((CAB_PROVINCIAS, CAB_CAPITALES), huecos)):
             return size
         size -= 0.1
     return FONT_IDX_CABCOL_MIN
 
 
-def _cabecera_columnas(pdf, x, y, size, w_prov, w_pag):
-    """Rótulos de las tres columnas, a dos líneas (español encima, inglés
-    debajo) y con un hairline debajo."""
-    w_cap = ANCHO_BLOQUE_IDX - w_prov - w_pag - 2 * GAP_COL_IDX
-    cajas = (
-        (x, w_prov + GAP_COL_IDX, "L"),
-        (x + w_prov + GAP_COL_IDX, w_cap, "L"),
-        (x + ANCHO_BLOQUE_IDX - w_pag, w_pag, "R"),
+def _cabecera_columnas(pdf, x, y, ancho, size, w_prov, w_pag):
+    """Fila de rótulos, sobre gris y con los dos idiomas uno bajo otro."""
+    pdf.set_fill_color(*GRIS_CABECERA)
+    pdf.rect(x, y, ancho, ALTO_CABCOL, style="F")
+
+    celdas = (
+        (x + PAD_CELDA, w_prov - 2 * PAD_CELDA, CAB_PROVINCIAS),
+        (x + w_prov + PAD_CELDA,
+         ancho - w_prov - w_pag - 2 * PAD_CELDA, CAB_CAPITALES),
     )
-    for (x_caja, ancho, alineacion), (es, en) in zip(cajas, CAB_COLUMNAS):
+    for x_celda, ancho_celda, (es, en) in celdas:
+        pdf.set_text_color(*TINTA_ROTULO)
         pdf.set_font(FUENTE, "B", size)
-        pdf.set_text_color(120, 120, 120)
-        pdf.set_xy(x_caja, y)
-        pdf.cell(ancho, ALTO_CABCOL, _enc(es), align=alineacion)
+        pdf.set_xy(x_celda, y)
+        pdf.cell(ancho_celda, ALTO_CABLINEA, _enc(es), align="L")
+        pdf.set_text_color(*TINTA_ROTULO_EN)
         pdf.set_font(FUENTE, "I", size)
-        pdf.set_text_color(155, 155, 155)
-        pdf.set_xy(x_caja, y + ALTO_CABCOL)
-        pdf.cell(ancho, ALTO_CABCOL, _enc(en), align=alineacion)
+        pdf.set_xy(x_celda, y + ALTO_CABLINEA)
+        pdf.cell(ancho_celda, ALTO_CABLINEA, _enc(en), align="L")
 
-    y_linea = y + 2 * ALTO_CABCOL + 0.4
-    pdf.set_draw_color(185, 185, 185)
-    pdf.set_line_width(0.15)
-    pdf.line(x, y_linea, x + ANCHO_BLOQUE_IDX, y_linea)
-    return y_linea
+    pdf.set_text_color(*TINTA_ROTULO)
+    pdf.set_font(FUENTE, "B", size)
+    pdf.set_xy(x + ancho - w_pag, y)
+    pdf.cell(w_pag, ALTO_CABCOL, _enc(CAB_PAGINA), align="C")
+    return y + ALTO_CABCOL
 
 
-def _subtitulo_bloque(pdf, x, y, texto):
-    """Rótulo de archipiélago, sobre su columna de la sección insular."""
-    # Solo se incrustan redonda, negrita y cursiva: pedir "BI" haría que fpdf2
-    # sustituyese la fuente por la Helvetica base, que KDP no acepta.
-    pdf.set_font(FUENTE, "I", FONT_IDX_SUBSECCION)
+def _tabla_indice(pdf, x, y, ancho, filas, n_slots, cuerpos, row_h, w_prov,
+                  w_pag, cabecera=True):
+    """Una tabla completa: cabecera opcional, filas y rejilla.
+
+    `n_slots` es el número de filas que ocupa la caja, que puede ser mayor que
+    las filas con datos: así las dos tablas de una misma sección acaban a la
+    misma altura y la celda que sobra queda vacía, como en la hoja.
+    """
+    alto_cab = ALTO_CABCOL if cabecera else 0.0
+    if cabecera:
+        _cabecera_columnas(pdf, x, y, ancho, cuerpos[1], w_prov, w_pag)
+    for i, fila in enumerate(filas):
+        _fila_indice(pdf, x, y + alto_cab + i * row_h, ancho, fila, cuerpos[0],
+                     row_h, w_prov, w_pag)
+    _rejilla_tabla(pdf, x, y, ancho, alto_cab, n_slots, row_h, w_prov, w_pag)
+    return y + alto_cab + n_slots * row_h
+
+
+def _titulo_indice(pdf, x, y, ancho):
+    """Título del índice, bilingüe y centrado. Sin recuadro: la rejilla es
+    cosa de las tablas."""
+    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
     pdf.set_text_color(*AZUL_ACENTO)
     pdf.set_xy(x, y)
-    pdf.cell(ANCHO_BLOQUE_IDX, ALTO_SUBSECCION, _enc(texto), align="L")
-    return y + ALTO_SUBSECCION
+    pdf.cell(ancho, ALTO_TITULO, _enc(TITULO_IDX), align="C")
+    return y + ALTO_TITULO
 
 
-def _linea_final(pdf, x, y, entrada, w_pag):
-    """Una de las dos referencias a los índices alfabéticos del final: texto
-    bilingüe, puntos guía y número de página a la derecha."""
-    texto = _enc(entrada["es"] + "   ·   " + entrada["en"])
-    pdf.set_font(FUENTE, "", FONT_IDX_FINAL)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(x, y)
-    w_texto = pdf.get_string_width(texto)
-    pdf.cell(w_texto + 0.5, ALTO_FINAL, texto, align="L")
+def _rotulo_seccion(pdf, x, y, lineas, size=None):
+    """Rótulo de sección: texto a la izquierda, fuera de la tabla, como en la
+    hoja de cálculo. Devuelve la Y de debajo.
 
-    x_puntos = x + w_texto + 1.6
-    ancho_puntos = x + CONTENT_WIDTH - w_pag - 1.2 - x_puntos
-    w_punto = pdf.get_string_width(".")
-    if ancho_puntos > w_punto:
-        pdf.set_text_color(150, 150, 150)
-        pdf.set_xy(x_puntos, y)
-        pdf.cell(ancho_puntos, ALTO_FINAL, "." * int(ancho_puntos / w_punto), align="L")
+    Va en negro, no en el azul de las cabeceras del resto del libro: en esta
+    página el azul es solo del título, para que se vea de un vistazo dónde
+    empieza el índice.
+    """
+    pdf.set_font(FUENTE, "B", size or FONT_IDX_SECCION)
+    pdf.set_text_color(*TINTA_SECCION)
+    for i, linea in enumerate(lineas):
+        pdf.set_xy(x, y + i * ALTO_ROTULO)
+        pdf.cell(CONTENT_WIDTH, ALTO_ROTULO, _enc(linea), align="L")
+    return y + len(lineas) * ALTO_ROTULO
 
-    pdf.set_font(FUENTE, "B", FONT_IDX_FINAL)
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(x + CONTENT_WIDTH - w_pag, y)
-    pdf.cell(w_pag, ALTO_FINAL, "" if entrada["pagina"] is None
-             else str(entrada["pagina"]), align="R")
-    return y + ALTO_FINAL
+
+def _caja_final(pdf, x, y, w_pag):
+    """Las dos referencias a los índices alfabéticos del final, en su propia
+    caja y con la columna de páginas separada, como el resto de tablas."""
+    alto = 2 * ALTO_FINAL
+    for i, entrada in enumerate(ENTRADAS_FINALES):
+        y_fila = y + i * ALTO_FINAL
+        texto = _enc(entrada["es"] + SEPARADOR_BILINGUE + entrada["en"])
+        pdf.set_font(FUENTE, "", FONT_IDX_FINAL)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_xy(x + PAD_CELDA, y_fila)
+        w_texto = pdf.get_string_width(texto)
+        pdf.cell(w_texto + 0.5, ALTO_FINAL, texto, align="L")
+
+        x_puntos = x + PAD_CELDA + w_texto + 1.6
+        ancho_puntos = x + CONTENT_WIDTH - w_pag - 1.2 - x_puntos
+        w_punto = pdf.get_string_width(".")
+        if ancho_puntos > w_punto:
+            pdf.set_text_color(150, 150, 150)
+            pdf.set_xy(x_puntos, y_fila)
+            pdf.cell(ancho_puntos, ALTO_FINAL,
+                     "." * int(ancho_puntos / w_punto), align="L")
+
+        pdf.set_font(FUENTE, "B", FONT_IDX_FINAL)
+        pdf.set_text_color(*TINTA_PROVINCIA)
+        pdf.set_xy(x + CONTENT_WIDTH - w_pag, y_fila)
+        pdf.cell(w_pag, ALTO_FINAL, "" if entrada["pagina"] is None
+                 else str(entrada["pagina"]), align="C")
+
+    pdf.set_draw_color(*NEGRO_REJILLA)
+    pdf.set_line_width(0.15)
+    pdf.rect(x, y, CONTENT_WIDTH, alto)
+    pdf.line(x, y + ALTO_FINAL, x + CONTENT_WIDTH, y + ALTO_FINAL)
+    x_pag = x + CONTENT_WIDTH - w_pag
+    pdf.line(x_pag, y, x_pag, y + alto)
+    return y + alto
 
 
 def _reparto_vertical(disponible, n_filas, fijo, n_huecos):
     """Interlínea y hueco entre secciones que llenan la página.
 
-    `fijo` es todo lo que no se puede estirar (títulos, filetes, rótulos).
+    `fijo` es todo lo que no se puede estirar (título, rótulos, cabeceras).
     La altura que sobra va PRIMERO a la interlínea, hasta ROW_IDX_MAX: airear
     las filas se nota en toda la tabla, mientras que un hueco enorme entre
     secciones solo abre agujeros. Lo que aún sobre se reparte entre los huecos,
@@ -1514,80 +1605,84 @@ def render_pagina_indice(pdf, entradas):
     _folio_superior(pdf)
 
     izq, der, baleares, canarias, ciudades = _secciones_indice(entradas)
-    # Los dos archipiélagos van juntos en la medición: comparten columna de
-    # provincias para que las dos mitades de la sección insular queden
-    # alineadas entre sí, así que también tienen que caber juntos (la columna
-    # la marca Santa Cruz de Tenerife y la capital más larga, Las Palmas de
-    # Gran Canaria, está en la otra mitad).
-    size, (w_pen, w_isla, w_ciu), w_pag = _metricas_indice(
-        pdf, [izq + der, baleares + canarias, ciudades]
-    )
+
+    # --- Anchos y cuerpos de cada tabla ---
+    w_pag = _ancho_pagina(pdf)
+    disponible = CONTENT_WIDTH - SEP_BLOQUES_IDX
+    ancho_mitad = disponible / 2
+
+    # La peninsular manda: es una sola tabla partida en dos mitades iguales, y
+    # ningún otro bloque puede pasar de su cuerpo de letra.
+    size_pen = _cuerpo_bloque(pdf, izq + der, ancho_mitad, w_pag)
+    w_pen = _ancho_provincia(pdf, izq + der, size_pen, ancho_mitad, w_pag)
+
+    # La insular reparte el ancho según lo que pide cada archipiélago, y las
+    # dos mitades comparten cuerpo para que la sección se lea pareja.
+    anchos_isla = _reparto_ancho(pdf, [baleares, canarias], disponible,
+                                 size_pen, w_pag)
+    size_isla = min([size_pen] + [_cuerpo_bloque(pdf, filas, ancho, w_pag)
+                                  for filas, ancho in zip([baleares, canarias],
+                                                          anchos_isla)])
+    w_isla = [_ancho_provincia(pdf, filas, size_isla, ancho, w_pag)
+              for filas, ancho in zip([baleares, canarias], anchos_isla)]
+
+    size_ciu = min(size_pen, _cuerpo_bloque(pdf, ciudades, ancho_mitad, w_pag))
+    w_ciu = _ancho_provincia(pdf, ciudades, size_ciu, ancho_mitad, w_pag)
+
+    cab_size = _cuerpo_cabecera_columnas(pdf, w_pen, ancho_mitad - w_pen - w_pag)
 
     x = x_contenido(pdf.page_no())
-    x_der = x + ANCHO_BLOQUE_IDX + SEP_BLOQUES_IDX
+    x_der = x + ancho_mitad + SEP_BLOQUES_IDX
 
-    # --- Cabecera: título bilingüe y separador de rombo, como las portadas ---
-    y = Y_TOP + 6.0
-    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
-    pdf.set_text_color(*AZUL_ACENTO)
-    pdf.set_xy(x, y)
-    pdf.cell(CONTENT_WIDTH, 9.0, _enc(TITULO_IDX), align="C")
-    y += 9.0 + 2.2
-    _dibujar_separador(pdf, x, CONTENT_WIDTH, y, color=AZUL_ACENTO, escala=0.55)
-    y_inicio = y + 3.5
+    # --- Título ---
+    y = _titulo_indice(pdf, x, Y_TOP + 6.0, CONTENT_WIDTH)
+    y_inicio = y + AIRE_TITULO
 
     # --- Altura: lo que no se estira, para repartir el resto entre filas y huecos
     n_filas = (max(len(izq), len(der))
                + max(len(baleares), len(canarias))
                + (len(ciudades) + 1) // 2)
-    alto_cabcol = 2 * ALTO_CABCOL + 0.4 + AIRE_CABECERA
     fijo = (
-        (ALTO_SECCION + 0.8 + AIRE_CABECERA + alto_cabcol)                 # peninsular
-        + (ALTO_SECCION + 0.8 + AIRE_CABECERA + ALTO_SUBSECCION)           # insular
-        + (2 * ALTO_SECCION + 0.8 + AIRE_CABECERA)                         # ciudades
-        + (0.8 + AIRE_CABECERA + 2 * ALTO_FINAL)                           # cierre
+        (ALTO_ROTULO + AIRE_ROTULO + ALTO_CABCOL)           # peninsular
+        + (ALTO_ROTULO + AIRE_ROTULO + ALTO_ROTULO)         # insular + archipiélago
+        + (2 * ALTO_ROTULO + AIRE_ROTULO)                   # ciudades autónomas
+        + (2 * ALTO_FINAL)                                  # cierre
     )
     row_h, gap = _reparto_vertical(Y_LIMIT - y_inicio, n_filas, fijo, 3)
 
-    cab_size = _cuerpo_cabecera_columnas(
-        pdf, w_pen, ANCHO_BLOQUE_IDX - w_pen - w_pag - 2 * GAP_COL_IDX)
+    # --- España peninsular: dos tablas gemelas, a la misma altura ---
+    y = _rotulo_seccion(pdf, x, y_inicio, [SECCION_PENINSULAR]) + AIRE_ROTULO
+    slots = max(len(izq), len(der))
+    cuerpos_pen = (size_pen, cab_size)
+    _tabla_indice(pdf, x, y, ancho_mitad, izq, slots, cuerpos_pen, row_h,
+                  w_pen, w_pag)
+    y_fin = _tabla_indice(pdf, x_der, y, ancho_mitad, der, slots, cuerpos_pen,
+                          row_h, w_pen, w_pag)
 
-    # --- España peninsular: dos medias tablas gemelas ---
-    y = _titulo_seccion(pdf, x, CONTENT_WIDTH, y_inicio, [SECCION_PENINSULAR])
-    y += AIRE_CABECERA
-    _cabecera_columnas(pdf, x, y, cab_size, w_pen, w_pag)
-    y = _cabecera_columnas(pdf, x_der, y, cab_size, w_pen, w_pag) + AIRE_CABECERA
+    # --- España insular: un archipiélago en cada tabla, sin cabecera propia ---
+    y = _rotulo_seccion(pdf, x, y_fin + gap, [SECCION_INSULAR]) + AIRE_ROTULO
+    x_isla = (x, x + anchos_isla[0] + SEP_BLOQUES_IDX)
+    for x_arch, rotulo in zip(x_isla, (SUB_BALEARES, SUB_CANARIAS)):
+        _rotulo_seccion(pdf, x_arch, y, [rotulo], FONT_IDX_SUBSECCION)
+    y += ALTO_ROTULO
     y_fin = max(
-        _bloque_filas(pdf, x, y, izq, size, row_h, w_pen, w_pag),
-        _bloque_filas(pdf, x_der, y, der, size, row_h, w_pen, w_pag),
-    )
-
-    # --- España insular: un archipiélago en cada media tabla ---
-    y = _titulo_seccion(pdf, x, CONTENT_WIDTH, y_fin + gap, [SECCION_INSULAR])
-    y += AIRE_CABECERA
-    _subtitulo_bloque(pdf, x, y, SUB_BALEARES)
-    y = _subtitulo_bloque(pdf, x_der, y, SUB_CANARIAS)
-    y_fin = max(
-        _bloque_filas(pdf, x, y, baleares, size, row_h, w_isla, w_pag),
-        _bloque_filas(pdf, x_der, y, canarias, size, row_h, w_isla, w_pag),
+        _tabla_indice(pdf, x_arch, y, ancho, filas, len(filas),
+                      (size_isla, cab_size), row_h, w_prov, w_pag,
+                      cabecera=False)
+        for x_arch, ancho, filas, w_prov in zip(
+            x_isla, anchos_isla, (baleares, canarias), w_isla)
     )
 
     # --- Ciudades autónomas: Ceuta a la izquierda, Melilla a la derecha ---
-    y = _titulo_seccion(pdf, x, CONTENT_WIDTH, y_fin + gap, list(SECCION_CIUDADES))
-    y += AIRE_CABECERA
+    y = _rotulo_seccion(pdf, x, y_fin + gap, list(SECCION_CIUDADES)) + AIRE_ROTULO
+    y_fin = y
     for i, ciudad in enumerate(ciudades):
-        _fila_indice(pdf, x if i % 2 == 0 else x_der, y + (i // 2) * row_h,
-                     ciudad, size, row_h, w_ciu, w_pag)
-    y_fin = y + ((len(ciudades) + 1) // 2) * row_h
+        y_fin = _tabla_indice(pdf, x if i % 2 == 0 else x_der, y, ancho_mitad,
+                              [ciudad], 1, (size_ciu, cab_size), row_h, w_ciu,
+                              w_pag, cabecera=False)
 
     # --- Índices alfabéticos del final del libro ---
-    y = y_fin + gap + 0.8
-    pdf.set_draw_color(*AZUL_ACENTO)
-    pdf.set_line_width(0.3)
-    pdf.line(x, y, x + CONTENT_WIDTH, y)
-    y += AIRE_CABECERA
-    for entrada in ENTRADAS_FINALES:
-        y = _linea_final(pdf, x, y, entrada, w_pag)
+    _caja_final(pdf, x, y_fin + gap, w_pag)
 
     pdf.set_text_color(0, 0, 0)
     pdf.set_draw_color(0, 0, 0)
@@ -1677,86 +1772,12 @@ def render_pagina_mapa(pdf):
     return 1
 
 
-# ---------------------------------------------------------------------------
-# PÁGINA DE NOTICIAS DE INTERÉS
-# ---------------------------------------------------------------------------
-# Página reservada: de momento solo anuncia para qué servirá, y a partir de la
-# edición de octubre de 2026 se llenará con las noticias del sector.
-TITULO_NOTICIAS_ES = "NOTICIAS DE INTERÉS"
-TITULO_NOTICIAS_EN = "NEWS OF INTEREST"
-TEXTO_NOTICIAS_ES = (
-    "Página reservada para noticias referentes al sector hotelero, en especial "
-    "los proyectos de nuevos hoteles con sus características, ubicación y fecha "
-    "aproximada de apertura, si la empresa propietaria autoriza su publicación. "
-    "Así como las bajas que se produzcan en los hoteles por el cese de su "
-    "actividad o cierre temporal por obras."
-)
-TEXTO_NOTICIAS_EN = (
-    "Page reserved for news related to the hotel sector, especially new hotel "
-    "projects with their characteristics, location, and approximate opening "
-    "date, provided that the owning company authorizes its publication. As well "
-    "as any removals of hotels from the listings due to the cessation of their "
-    "activity or temporary closure for construction works."
-)
-
-FONT_NOTICIAS = 10.0        # cuerpo de los dos párrafos
-LINEA_NOTICIAS = 5.2        # interlínea de los párrafos
-SANGRADO_NOTICIAS = 6.0     # estrecha la caja: una línea muy larga no se lee
-SEP_NOTICIAS = 7.0          # entre el párrafo español y el inglés
-
-
-def render_pagina_noticias(pdf):
-    """Página de noticias, detrás del mapa. Bilingüe y en una sola hoja.
-
-    El título va arriba, a la altura del del índice, y NO centrado en la
-    página: esta es una página reservada que se irá llenando de noticias a
-    partir de la edición de octubre de 2026, y las noticias entrarán por
-    debajo del anuncio, así que el blanco tiene que quedar al pie.
-    """
-    pdf.provincia_actual = None
-    pdf.provincia_continuacion = False
-    pdf.pie_forzado = False          # el número va arriba, como en el índice
-    pdf.add_page()
-    _folio_superior(pdf)
-
-    x = x_contenido(pdf.page_no()) + SANGRADO_NOTICIAS
-    ancho = CONTENT_WIDTH - 2 * SANGRADO_NOTICIAS
-    alto_es, alto_en = 9.0, 6.0
-    alto_separador = 6.0
-    y = Y_TOP + 6.0
-
-    # Mismo cuerpo, color y negrita que el título del índice y el del mapa,
-    # para que los preliminares se lean como un conjunto
-    pdf.set_text_color(*AZUL_ACENTO)
-    pdf.set_xy(x, y)
-    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
-    pdf.cell(ancho, alto_es, _enc(TITULO_NOTICIAS_ES), align="C")
-    pdf.set_xy(x, y + alto_es)
-    pdf.set_font(FUENTE, "B", FONT_MAPA_TITULO_EN)
-    pdf.cell(ancho, alto_en, _enc(TITULO_NOTICIAS_EN), align="C")
-
-    y += alto_es + alto_en + alto_separador / 2
-    _dibujar_separador(pdf, x, ancho, y, color=AZUL_ACENTO, escala=0.55)
-    y += alto_separador / 2
-
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font(FUENTE, "", FONT_NOTICIAS)
-    for texto in (TEXTO_NOTICIAS_ES, TEXTO_NOTICIAS_EN):
-        pdf.set_xy(x, y)
-        pdf.multi_cell(ancho, LINEA_NOTICIAS, _enc(texto), align="J",
-                       new_x="LEFT", new_y="NEXT")
-        y = pdf.get_y() + SEP_NOTICIAS
-    return 1
-
-
 def render_indice_general(pdf, entradas):
-    """Preliminares del libro: la página bilingüe de provincias, la del mapa
-    político y la de noticias de interés.
+    """Preliminares del libro: la página bilingüe de provincias y la del mapa
+    político.
 
     Devuelve el número total de páginas que han ocupado."""
-    return (render_pagina_indice(pdf, entradas)
-            + render_pagina_mapa(pdf)
-            + render_pagina_noticias(pdf))
+    return render_pagina_indice(pdf, entradas) + render_pagina_mapa(pdf)
 
 
 # ---- Cuántas páginas ocupa el índice general (se necesita ANTES de medir) ----
@@ -1865,6 +1886,6 @@ print(f"PDF generado: {PDF_FILE} - {pdf.page_no()} páginas, "
       f"{PAGE_WIDTH:.2f} x {PAGE_HEIGHT:.2f} mm "
       f"({PAGE_WIDTH / 25.4:.3f}\" x {PAGE_HEIGHT / 25.4:.3f}\") "
       f"{'CON sangrado' if CON_SANGRADO else 'SIN sangrado'}")
-print(f"Preliminares: {N_PAGINAS_INDICE} páginas (índice bilingüe, mapa y noticias). "
+print(f"Preliminares: {N_PAGINAS_INDICE} páginas (índice bilingüe y mapa). "
       f"Catálogo desde la {min(prov_pages_final.values())}, "
       f"hoteles A-Z en la {pag_hoteles}, poblaciones A-Z en la {pag_poblaciones}.")
