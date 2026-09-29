@@ -188,7 +188,7 @@ PORTADA = {
                       sufijo="®"),
     "titulo_es": dict(texto=TITULO_ES, estilo="B",  cap_top=34.92, ancho=122.57),
     "titulo_en": dict(texto=TITULO_EN, estilo="B",  cap_top=50.98, ancho=116.55),
-    "fecha":     dict(texto=FECHA, estilo="BI", cap_top=66.81, ancho=43.90),
+    "fecha":     dict(texto=FECHA, estilo="BI", cap_top=66.81, ancho=35.72),
     # 144 mm es practicamente el techo: el margen de seguridad deja 146.05 y
     # el PNG del SVG (1728 px) baja de los 300 ppp que pide KDP a partir de 146.
     "mapa":      dict(top=82.00, ancho=144.00),
