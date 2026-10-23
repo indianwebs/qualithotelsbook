@@ -12,9 +12,9 @@ PDF_FILE = "catalogo_hoteles.pdf"
 # Controla si se incluye la portada (portada.jpg). Poner False para saltarla.
 SHOW_PORTADA = False
 
-# Controla si se incluye la página de presentación (Segunda-pagina.jpg).
-# Poner True para volver a mostrarla; False para que el PDF empiece por el índice.
-SHOW_SEGUNDA_PAGINA = False
+# Controla si se incluye la página de presentación («Índice de índices»), la
+# primera tras la cubierta. False para que el PDF empiece por el índice.
+SHOW_PRESENTACION = True
 
 
 def normalizar_provincia(nombre):
@@ -167,6 +167,116 @@ def es_capital(row):
 
 df["ES_CAPITAL"] = df.apply(es_capital, axis=1)
 
+
+# ---------------------------------------------------------------------------
+# ISLAS
+# ---------------------------------------------------------------------------
+# El Excel solo trae la provincia, y en Baleares y Canarias eso no basta: por
+# orden alfabético, Alaior (Menorca) caía entre Alaró y Alcúdia (Mallorca). El
+# catálogo agrupa estas provincias por isla, cada isla en su propia página con
+# una banda que la nombra, y el índice general las lista con su página.
+#
+# Clave = provincia normalizada (igual que CAPITALES). Cada isla es
+# (nombre, capital, municipios); el orden de la lista es el del libro. Los
+# municipios van normalizados con `normalizar_ciudad` y sin el paréntesis que a
+# veces acompaña a la localidad, p. ej. "TEGUISE (LANZAROTE)".
+ISLAS = {
+    "ISLASBALEARES": [
+        ("Mallorca", "Palma", {
+            "ALARO", "ALCUDIA", "ALGAIDA", "ANDRATX", "ARIANY", "ARTA",
+            "BANYALBUFAR", "BINISSALEM", "BUGER", "BUNYOLA", "CALVIA",
+            "CAMPANET", "CAMPOS", "CAPDEPERA", "CONSELL", "COSTITX", "DEIA",
+            "ESCORCA", "ESPORLES", "ESTELLENCS", "FELANITX", "FORNALUTX",
+            "INCA", "LLORET DE VISTALEGRE", "LLOSETA", "LLUBI", "LLUCMAJOR",
+            "MANACOR", "MANCOR DE LA VALL", "MARIA DE LA SALUT", "MARRATXI",
+            "MONTUIRI", "MURO", "PALMA", "PALMA DE MALLORCA", "PETRA",
+            "POLLENCA", "PORRERES", "PUIGPUNYENT", "SA POBLA", "SANT JOAN",
+            "SANT LLORENC DES CARDASSAR", "SANTA EUGENIA", "SANTA MARGALIDA",
+            "SANTA MARIA DEL CAMI", "SANTANYI", "SELVA", "SENCELLES",
+            "SES SALINES", "SINEU", "SOLLER", "SON SERVERA", "VALLDEMOSSA",
+            "VILAFRANCA DE BONANY",
+        }),
+        ("Menorca", "Maó (Mahón)", {
+            "ALAIOR", "CIUTADELLA", "CIUTADELLA DE MENORCA", "ES CASTELL",
+            "ES MERCADAL", "ES MIGJORN GRAN", "FERRERIES", "MAHON", "MAO",
+            "MAO MAHON", "SANT LLUIS",
+        }),
+        ("Ibiza", "Eivissa (Ibiza)", {
+            "EIVISSA", "IBIZA", "SANT ANTONI DE PORTMANY",
+            "SANT JOAN DE LABRITJA", "SANT JOSEP DE SA TALAIA",
+            "SANTA EULALIA DEL RIO", "SANTA EULARIA DES RIU",
+        }),
+        ("Formentera", "Sant Francesc Xavier", {
+            "FORMENTERA", "SANT FRANCESC XAVIER",
+        }),
+    ],
+    "LASPALMAS": [
+        ("Gran Canaria", "Las Palmas de Gran Canaria", {
+            "AGAETE", "AGUIMES", "ARTENARA", "ARUCAS", "FIRGAS", "GALDAR",
+            "INGENIO", "LA ALDEA DE SAN NICOLAS", "LAS PALMAS DE GRAN CANARIA",
+            "MOGAN", "MOYA", "SAN BARTOLOME DE TIRAJANA", "SANTA BRIGIDA",
+            "SANTA LUCIA DE TIRAJANA", "SANTA MARIA DE GUIA", "TEJEDA",
+            "TELDE", "TEROR", "VALLESECO", "VALSEQUILLO DE GRAN CANARIA",
+            "VEGA DE SAN MATEO",
+        }),
+        ("Lanzarote", "Arrecife", {
+            "ARRECIFE", "HARIA", "SAN BARTOLOME", "TEGUISE", "TIAS", "TINAJO",
+            "YAIZA",
+        }),
+        ("Fuerteventura", "Puerto del Rosario", {
+            "ANTIGUA", "BETANCURIA", "LA OLIVA", "PAJARA",
+            "PUERTO DEL ROSARIO", "TUINEJE",
+        }),
+    ],
+    "SANTACRUZDETENERIFE": [
+        ("Tenerife", "Santa Cruz de Tenerife", {
+            "ADEJE", "ARAFO", "ARICO", "ARONA", "BUENAVISTA DEL NORTE",
+            "CANDELARIA", "EL ROSARIO", "EL SAUZAL", "EL TANQUE", "FASNIA",
+            "GARACHICO", "GRANADILLA DE ABONA", "GUIA DE ISORA", "GUIMAR",
+            "ICOD DE LOS VINOS", "LA GUANCHA", "LA MATANZA DE ACENTEJO",
+            "LA OROTAVA", "LA VICTORIA DE ACENTEJO", "LOS REALEJOS",
+            "LOS SILOS", "PUERTO DE LA CRUZ", "SAN CRISTOBAL DE LA LAGUNA",
+            "SAN JUAN DE LA RAMBLA", "SAN MIGUEL DE ABONA",
+            "SANTA CRUZ DE TENERIFE", "SANTA URSULA", "SANTIAGO DEL TEIDE",
+            "TACORONTE", "TEGUESTE", "VILAFLOR", "VILAFLOR DE CHASNA",
+        }),
+        ("La Palma", "Santa Cruz de La Palma", {
+            "BARLOVENTO", "BRENA ALTA", "BRENA BAJA", "EL PASO",
+            "FUENCALIENTE", "FUENCALIENTE DE LA PALMA", "GARAFIA",
+            "LOS LLANOS DE ARIDANE", "PUNTAGORDA", "PUNTALLANA",
+            "SAN ANDRES Y SAUCES", "SANTA CRUZ DE LA PALMA", "TAZACORTE",
+            "TIJARAFE", "VILLA DE MAZO",
+        }),
+        ("La Gomera", "San Sebastián de La Gomera", {
+            "AGULO", "ALAJERO", "HERMIGUA", "SAN SEBASTIAN DE LA GOMERA",
+            "VALLE GRAN REY", "VALLEHERMOSO",
+        }),
+        ("El Hierro", "Valverde", {
+            "EL PINAR", "EL PINAR DE EL HIERRO", "FRONTERA", "VALVERDE",
+        }),
+    ],
+}
+
+
+def isla_de(row):
+    """(orden, nombre) de la isla del hotel; (0, "") fuera de los archipiélagos.
+
+    Un municipio que no esté en ISLAS se avisa y va al final de su provincia,
+    sin banda: mejor eso que colarlo en una isla que no es la suya."""
+    clave = normalizar_provincia(row["PROVINCIA"]).replace(" ", "")
+    if clave not in ISLAS:
+        return 0, ""
+    loc = normalizar_ciudad(re.sub(r"\(.*?\)", "", str(row["LOCALIDAD"])))
+    for orden, (nombre, _capital, municipios) in enumerate(ISLAS[clave], 1):
+        if loc in municipios:
+            return orden, nombre
+    print(f"AVISO: no se sabe en qué isla está {row['LOCALIDAD']} "
+          f"({row['PROVINCIA']}); añadirla a ISLAS")
+    return len(ISLAS[clave]) + 1, ""
+
+
+df[["ISLA_ORDEN", "ISLA"]] = df.apply(isla_de, axis=1, result_type="expand")
+
 # Columna auxiliar para ordenar por nombre limpio (sin "HOTEL" al inicio, sin tildes)
 def _nombre_orden(x):
     s = str(x).strip()
@@ -180,13 +290,13 @@ def _nombre_orden(x):
 
 df["NOMBRE_ORDEN"] = df["NOMBRE DE EMPRESA"].apply(_nombre_orden)
 
-# Ordenar por: provincia → ES_CAPITAL (True primero) → localidad → estrellas descendentes → nombre alfabético
+# Ordenar por: provincia → isla → ES_CAPITAL (True primero) → localidad → estrellas descendentes → nombre alfabético
 df = df.sort_values(
-    by=["PROVINCIA", "ES_CAPITAL", "LOCALIDAD", "ESTRELLAS", "NOMBRE_ORDEN"],
+    by=["PROVINCIA", "ISLA_ORDEN", "ES_CAPITAL", "LOCALIDAD", "ESTRELLAS", "NOMBRE_ORDEN"],
     key=lambda col: (
         col.map(normalizar_provincia) if col.name in ["PROVINCIA", "LOCALIDAD"] else col
     ),
-    ascending=[True, False, True, False, True],
+    ascending=[True, True, False, True, False, True],
 )
 
 
@@ -260,6 +370,19 @@ class PDF(FPDF):
         self.set_draw_color(180, 180, 180)
         self.set_line_width(0.2)
         self.line(izq, Y_LINEA, PAGE_WIDTH - der, Y_LINEA)
+
+        # Banda de la isla: se repite en cada página para que, abriendo el
+        # libro por cualquier sitio, se sepa en qué isla está uno.
+        isla = getattr(self, "isla_actual", "")
+        if isla:
+            ancho = PAGE_WIDTH - der - izq
+            self.set_fill_color(*AZUL_ACENTO)
+            self.rect(izq, Y_BANDA_ISLA, ancho, ALTO_BANDA_ISLA, style="F")
+            self.set_font(FUENTE, "B", FONT_BANDA_ISLA)
+            self.set_text_color(255, 255, 255)
+            self.set_xy(izq, Y_BANDA_ISLA)
+            self.cell(ancho, ALTO_BANDA_ISLA, _enc(f"ISLA DE {isla.upper()}"),
+                      align="C")
         self.set_text_color(0, 0, 0)
 
     def footer(self):
@@ -433,6 +556,18 @@ PASO_COLUMNA = COLUMN_WIDTH + SEP_COLUMNAS
 # Cabecera de provincia + línea decorativa
 Y_LINEA = Y_TOP + 6.5
 Y_START = Y_TOP + 9.5
+
+# Banda con el nombre de la isla, bajo la línea de la cabecera, en todas las
+# páginas de Baleares y Canarias. Empuja hacia abajo el arranque de columnas.
+FONT_BANDA_ISLA = 7.5
+ALTO_BANDA_ISLA = 4.6
+Y_BANDA_ISLA = Y_LINEA + 1.5
+Y_START_ISLA = Y_BANDA_ISLA + ALTO_BANDA_ISLA + (Y_START - Y_LINEA)
+
+
+def y_arranque(pdf):
+    """Y donde empiezan las columnas en la página actual del catálogo."""
+    return Y_START_ISLA if getattr(pdf, "isla_actual", "") else Y_START
 # El pie tiene su PROPIO margen, independiente de MARGIN_BOTTOM. Si se bajara
 # tocando MARGIN_BOTTOM, el catálogo ganaría altura, entrarían más hoteles por
 # columna y cambiaría la paginación (y con ella el lomo de la cubierta). Así el
@@ -877,7 +1012,31 @@ provincias_unicas = sorted(df["PROVINCIA"].unique().tolist(), key=normalizar_pro
 # Entradas del índice general: una por provincia. Los diccionarios se rellenan
 # con la página REAL tras la pasada 1; como se reutilizan los mismos objetos,
 # basta con mutarlos.
-indice_provincias = [entrada_indice(prov) for prov in provincias_unicas]
+def entradas_islas(prov):
+    """Filas de las islas de una provincia insular, en el orden del catálogo.
+
+    Van debajo de la fila de su provincia, sangradas y en redonda: la capital
+    es la de la isla y la página, la de la banda de esa isla."""
+    clave = normalizar_provincia(prov).replace(" ", "")
+    presentes = set(df.loc[df["PROVINCIA"] == prov, "ISLA"])
+    return [
+        {
+            "provincia": prov,
+            "isla": nombre,
+            "nombre": nombre,
+            "capital": capital,
+            "grupo": GRUPO_INSULAR[clave],
+            "pagina": None,
+        }
+        for nombre, capital, _municipios in ISLAS.get(clave, [])
+        if nombre in presentes
+    ]
+
+
+indice_provincias = []
+for _prov in provincias_unicas:
+    indice_provincias.append(entrada_indice(_prov))
+    indice_provincias.extend(entradas_islas(_prov))
 entradas_indice = indice_provincias
 
 # ---------------------------------------------------------------------------
@@ -928,8 +1087,14 @@ def alto_real_localidad(pdf, localidad):
 def render_catalogo(pdf):
     """Dibuja TODO el catálogo por provincias en `pdf`.
 
-    Devuelve (prov_pages, hotel_pages, loc_pages): la página REAL de la primera
-    aparición de cada provincia, hotel (nombre limpio) y localidad.
+    Devuelve (prov_pages, isla_pages, hotel_pages, loc_pages): la página REAL
+    de la primera aparición de cada provincia, isla (clave (provincia, isla))
+    y localidad (clave (localidad, provincia): Torrent o Sobrado existen en dos
+    provincias), y TODAS las páginas de cada nombre de hotel (nombre limpio),
+    porque hay cientos de nombres repetidos en ciudades distintas.
+
+    En Baleares y Canarias cada isla empieza en página nueva, igual que una
+    provincia, y la cabecera lleva la banda con su nombre.
 
     Los hoteles no se dibujan según van saliendo: se acumulan en un buffer por
     columna y se vuelcan cuando la columna se cierra. Así, en el momento de
@@ -939,6 +1104,7 @@ def render_catalogo(pdf):
     decisiones de salto de columna y de página son exactamente las de antes.
     """
     prov_pages = {}
+    isla_pages = {}
     hotel_pages = {}
     loc_pages = {}
 
@@ -949,8 +1115,10 @@ def render_catalogo(pdf):
 
     x_positions = columnas(1)
     pdf.provincia_actual = ""
+    pdf.isla_actual = ""
     y_actual = [Y_START] * COLS
     provincia_anterior = ""
+    isla_anterior = ""
     localidad_anterior = ""
     current_col = 0
 
@@ -1013,23 +1181,31 @@ def render_catalogo(pdf):
         provincia = str(row["PROVINCIA"])
         localidad = str(row["LOCALIDAD"])
         hotel_name = str(row["NOMBRE DE EMPRESA"]).strip()
+        isla = row["ISLA"]
 
-        # CAMBIO DE PROVINCIA → NUEVA PÁGINA Y RESET DE ALTURAS
-        if provincia != provincia_anterior:
+        # CAMBIO DE PROVINCIA O DE ISLA → NUEVA PÁGINA Y RESET DE ALTURAS
+        cambio_provincia = provincia != provincia_anterior
+        if cambio_provincia or isla != isla_anterior:
             # La columna a medias de la provincia anterior se vuelca ANTES de
             # cambiar de página, o su contenido caería en la página siguiente.
             volcar_columna(current_col, completa=False)
             provincia_anterior = provincia
+            isla_anterior = isla
             localidad_anterior = ""
             pdf.provincia_actual = provincia
-            pdf.provincia_continuacion = False
+            pdf.isla_actual = isla
+            # Una isla nueva dentro de la misma provincia es continuación de
+            # la provincia: la cabecera lo dice y la banda nombra la isla.
+            pdf.provincia_continuacion = not cambio_provincia
             pdf.add_page()
             x_positions = columnas(pdf.page_no())
             current_col = 0
-            y_actual = [Y_START] * COLS
-            y_inicio = [Y_START] * COLS
+            y_actual = [y_arranque(pdf)] * COLS
+            y_inicio = [y_arranque(pdf)] * COLS
             if provincia not in prov_pages:
                 prov_pages[provincia] = pdf.page_no()
+            if isla and (provincia, isla) not in isla_pages:
+                isla_pages[(provincia, isla)] = pdf.page_no()
 
         hotel_name_display = limpiar_nombre_hotel(hotel_name)
 
@@ -1066,23 +1242,26 @@ def render_catalogo(pdf):
                 pdf.add_page()
                 x_positions = columnas(pdf.page_no())
                 current_col = 0
-                y_actual = [Y_START] * COLS
-                y_inicio = [Y_START] * COLS
+                y_actual = [y_arranque(pdf)] * COLS
+                y_inicio = [y_arranque(pdf)] * COLS
 
         x = x_positions[current_col]
 
         # ---- REGISTRAR HOTEL CON SU PÁGINA REAL (ya resuelto el salto de página) ----
-        if hotel_name_display and hotel_name_display not in hotel_pages:
-            hotel_pages[hotel_name_display] = pdf.page_no()
+        if hotel_name_display:
+            paginas = hotel_pages.setdefault(hotel_name_display, [])
+            if pdf.page_no() not in paginas:
+                paginas.append(pdf.page_no())
 
         if hay_cambio_localidad:
             localidad_anterior = localidad
-            if localidad not in loc_pages:
-                loc_pages[localidad] = pdf.page_no()
+            clave_loc = (localidad.strip(), provincia)
+            if clave_loc not in loc_pages:
+                loc_pages[clave_loc] = pdf.page_no()
         elif localidad_cont:
             # El "(cont.)" encabeza la página entera, no una columna: se dibuja
             # al vuelo y empuja hacia abajo el arranque de las tres columnas.
-            pdf.set_xy(x_positions[0], Y_START + 1)
+            pdf.set_xy(x_positions[0], y_arranque(pdf) + 1)
             pdf.set_font(FUENTE, "B", FONT_LOCALIDAD)
             pdf.set_text_color(*AZUL_ACENTO)
             pdf.multi_cell(COLUMN_WIDTH, line_height,
@@ -1105,7 +1284,8 @@ def render_catalogo(pdf):
     # La última columna del catálogo queda a medias: sin justificar.
     volcar_columna(current_col, completa=False)
 
-    return prov_pages, hotel_pages, loc_pages
+    pdf.isla_actual = ""
+    return prov_pages, isla_pages, hotel_pages, loc_pages
 
 
 # ---------------------------------------------------------------------------
@@ -1174,8 +1354,37 @@ def columnas_indice(page_no, n_cols, ancho_col):
     return [base + i * (ancho_col + SEP_INDICE) for i in range(n_cols)]
 
 
+def lineas_entrada(pdf, texto, paginas, ancho):
+    """Líneas de una entrada del índice con todas sus páginas.
+
+    En la primera línea van las páginas que quepan junto al nombre sin
+    recortarlo (al menos una, y nunca más de media columna si el nombre es tan
+    largo que hay que recortarlo igualmente). Las demás siguen en líneas de
+    solo puntos y números, que aprovechan casi todo el ancho."""
+    w_puntos = pdf.get_string_width(" .... ")
+    holgura = ancho - pdf.get_string_width(_enc(texto)) - w_puntos - 1.5
+    capacidad = max(holgura, ancho * 0.3)
+    grupos, actual = [], []
+    for pagina in paginas:
+        prueba = ", ".join(str(p) for p in actual + [pagina]) + ","
+        if actual and pdf.get_string_width(prueba) > capacidad:
+            grupos.append(actual)
+            actual = []
+            capacidad = ancho - w_puntos - 1.5
+        actual.append(pagina)
+    grupos.append(actual)
+    lineas = []
+    for i, grupo in enumerate(grupos):
+        sufijo = "," if i < len(grupos) - 1 else ""
+        lineas.append(format_index_entry(
+            pdf, texto if i == 0 else "",
+            ", ".join(str(p) for p in grupo) + sufijo, ancho))
+    return lineas
+
+
 def render_indice_alfabetico(pdf, titulo_es, titulo_en, entradas):
-    """Índice alfabético a 4 columnas verticales. `entradas` = [(texto, página)].
+    """Índice alfabético a 4 columnas verticales.
+    `entradas` = [(texto, [páginas])].
 
     Devuelve la página donde arranca."""
     pdf.provincia_actual = None
@@ -1193,10 +1402,12 @@ def render_indice_alfabetico(pdf, titulo_es, titulo_en, entradas):
     y_cols = [y_inicio] * COLS_INDICE
     col = 0
 
-    for texto, pagina in entradas:
-        # ¿Cabe otra línea en esta columna? Si no, se pasa a la siguiente y,
-        # agotadas las cuatro, a una página nueva con su cabecera.
-        if y_cols[col] + ROW_H_INDICE > Y_LIMIT_INDICE:
+    for texto, paginas in entradas:
+        lineas = lineas_entrada(pdf, texto, paginas, ancho_col - 2)
+        # ¿Cabe la entrada entera en esta columna? Si no, se pasa a la
+        # siguiente y, agotadas las cuatro, a una página nueva con su cabecera.
+        # Las líneas de una misma entrada no se separan nunca.
+        if y_cols[col] + len(lineas) * ROW_H_INDICE > Y_LIMIT_INDICE:
             col += 1
             if col >= COLS_INDICE:
                 pdf.add_page()
@@ -1206,10 +1417,10 @@ def render_indice_alfabetico(pdf, titulo_es, titulo_en, entradas):
                 x_cols = columnas_indice(pdf.page_no(), COLS_INDICE, ancho_col)
                 y_cols = [y_nueva] * COLS_INDICE
 
-        linea = format_index_entry(pdf, texto, pagina, ancho_col - 2)
-        pdf.set_xy(x_cols[col], y_cols[col])
-        pdf.cell(ancho_col, ROW_H_INDICE, linea, border=0, align="L")
-        y_cols[col] += ROW_H_INDICE
+        for linea in lineas:
+            pdf.set_xy(x_cols[col], y_cols[col])
+            pdf.cell(ancho_col, ROW_H_INDICE, linea, border=0, align="L")
+            y_cols[col] += ROW_H_INDICE
 
     return primera_pagina
 
@@ -1223,15 +1434,13 @@ def render_secciones_finales(pdf, hotel_pages, loc_pages):
     entradas_hoteles = [(h, hotel_pages[h]) for h in hoteles_lista]
 
     # Poblaciones → página REAL (capturada durante el render del catálogo).
-    # loc_pages usa la localidad tal cual aparece; normalizamos la clave para
-    # fusionar variantes por espacios/mayúsculas y quedarnos con la 1ª página.
+    # Una localidad con el mismo nombre en dos provincias lleva las dos páginas.
     poblacion_pages = {}
-    for _loc, _pg in loc_pages.items():
-        _clave = str(_loc).strip()
-        if _clave and _clave not in poblacion_pages:
-            poblacion_pages[_clave] = _pg
+    for (_loc, _prov), _pg in loc_pages.items():
+        if _loc:
+            poblacion_pages.setdefault(_loc, []).append(_pg)
     poblaciones_lista = sorted(poblacion_pages.keys(), key=normalizar_ciudad)
-    entradas_pob = [(p, poblacion_pages[p]) for p in poblaciones_lista]
+    entradas_pob = [(p, sorted(poblacion_pages[p])) for p in poblaciones_lista]
 
     pag_hoteles = nueva_portada_seccion(pdf, PORTADA_HOTELES_ES, PORTADA_HOTELES_EN)
     render_indice_alfabetico(pdf, TITULO_HOTELES_ES, TITULO_HOTELES_EN, entradas_hoteles)
@@ -1432,11 +1641,17 @@ def _rejilla_tabla(pdf, x, y, ancho, alto_cab, n_filas, row_h, w_prov, w_pag):
 
 
 def _fila_indice(pdf, x, y, ancho, fila, size, row_h, w_prov, w_pag):
-    """Una fila de la tabla: PROVINCIA | capital | página, celda a celda."""
-    pdf.set_font(FUENTE, "B", size)
+    """Una fila de la tabla: PROVINCIA | capital | página, celda a celda.
+
+    Las filas de isla llevan el nombre sangrado, en redonda y precedido de un
+    guion, para que se lean como parte de la provincia de encima."""
+    es_isla = bool(fila.get("isla"))
+    sangria = SANGRIA_ISLA if es_isla else 0.0
+    pdf.set_font(FUENTE, "" if es_isla else "B", size)
     pdf.set_text_color(*TINTA_PROVINCIA)
-    pdf.set_xy(x + PAD_CELDA, y)
-    pdf.cell(w_prov - 2 * PAD_CELDA, row_h, _enc(fila["nombre"]), align="L")
+    pdf.set_xy(x + PAD_CELDA + sangria, y)
+    pdf.cell(w_prov - 2 * PAD_CELDA - sangria, row_h,
+             _enc(("- " if es_isla else "") + fila["nombre"]), align="L")
 
     pdf.set_font(FUENTE, "", size)
     pdf.set_text_color(*TINTA_CAPITAL)
@@ -1468,6 +1683,9 @@ def _cuerpo_cabecera_columnas(pdf, w_prov, w_cap):
             return size
         size -= 0.1
     return FONT_IDX_CABCOL_MIN
+
+
+SANGRIA_ISLA = 1.5          # sangrado de las filas de isla bajo su provincia
 
 
 def _cabecera_columnas(pdf, x, y, ancho, size, w_prov, w_pag):
@@ -1544,10 +1762,18 @@ def _rotulo_seccion(pdf, x, y, lineas, size=None):
 def _caja_final(pdf, x, y, w_pag):
     """Las dos referencias a los índices alfabéticos del final, en su propia
     caja y con la columna de páginas separada, como el resto de tablas."""
-    alto = 2 * ALTO_FINAL
-    for i, entrada in enumerate(ENTRADAS_FINALES):
+    filas = [(e["es"] + SEPARADOR_BILINGUE + e["en"], e["pagina"])
+             for e in ENTRADAS_FINALES]
+    return _caja_con_paginas(pdf, x, y, filas, w_pag)
+
+
+def _caja_con_paginas(pdf, x, y, filas, w_pag):
+    """Caja de filas (texto, página): texto a la izquierda, puntos de guía y la
+    página en su propia columna, con la rejilla de las tablas del índice."""
+    alto = len(filas) * ALTO_FINAL
+    for i, (texto, pagina) in enumerate(filas):
         y_fila = y + i * ALTO_FINAL
-        texto = _enc(entrada["es"] + SEPARADOR_BILINGUE + entrada["en"])
+        texto = _enc(texto)
         pdf.set_font(FUENTE, "", FONT_IDX_FINAL)
         pdf.set_text_color(0, 0, 0)
         pdf.set_xy(x + PAD_CELDA, y_fila)
@@ -1566,13 +1792,14 @@ def _caja_final(pdf, x, y, w_pag):
         pdf.set_font(FUENTE, "B", FONT_IDX_FINAL)
         pdf.set_text_color(*TINTA_PROVINCIA)
         pdf.set_xy(x + CONTENT_WIDTH - w_pag, y_fila)
-        pdf.cell(w_pag, ALTO_FINAL, "" if entrada["pagina"] is None
-                 else str(entrada["pagina"]), align="C")
+        pdf.cell(w_pag, ALTO_FINAL, "" if pagina is None else str(pagina),
+                 align="C")
 
     pdf.set_draw_color(*NEGRO_REJILLA)
     pdf.set_line_width(0.15)
     pdf.rect(x, y, CONTENT_WIDTH, alto)
-    pdf.line(x, y + ALTO_FINAL, x + CONTENT_WIDTH, y + ALTO_FINAL)
+    for i in range(1, len(filas)):
+        pdf.line(x, y + i * ALTO_FINAL, x + CONTENT_WIDTH, y + i * ALTO_FINAL)
     x_pag = x + CONTENT_WIDTH - w_pag
     pdf.line(x_pag, y, x_pag, y + alto)
     return y + alto
@@ -1691,93 +1918,169 @@ def render_pagina_indice(pdf, entradas):
 
 
 # ---------------------------------------------------------------------------
-# PÁGINA DEL MAPA POLÍTICO
+# PÁGINA DE PRESENTACIÓN («ÍNDICE DE ÍNDICES»)
 # ---------------------------------------------------------------------------
-MAPA_IMAGEN = "mapa final.jpg"
+# Primera página del libro, nada más abrir la cubierta: qué es la guía, cómo se
+# usa y dónde está cada índice. Sustituye a Segunda-pagina.jpg, que llevaba las
+# páginas escritas a mano y se quedaba desfasada en cuanto cambiaba el libro;
+# aquí salen de la pasada de medición, igual que las del índice general.
+MARCA_GUIA = "QualitHotelsBook"
+SUBTITULO_GUIA = "GUÍA DE HOTELES DE ESPAÑA" + SEPARADOR_BILINGUE + "SPAIN HOTELS GUIDE"
 
-# Marcadores del formato JPEG, escritos por su valor para no depender de
-# secuencias de escape dentro de literales de bytes.
-MARCA = bytes((0xFF,))          # todo marcador empieza por aquí
-SOI = bytes((0xFF, 0xD8))       # "Start Of Image": los dos primeros bytes
-TITULO_MAPA_ES = "MAPA POLÍTICO DE ESPAÑA"
-TITULO_MAPA_EN = "POLITICAL MAP OF SPAIN"
-FONT_MAPA_TITULO_EN = 11.0
+# Cada idioma: [(rótulo, párrafos)], y el rótulo de la caja de índices.
+PRESENTACION = {
+    "es": {
+        "secciones": [
+            ("PRESENTACIÓN Y OBJETO DE ESTA GUÍA", [
+                "Guía de los hoteles legalmente autorizados existentes en "
+                "España, con su nombre, categoría, número de habitaciones, "
+                "dirección postal, teléfono y web oficial, para facilitar al "
+                "lector una rápida comunicación o consulta.",
+            ]),
+            ("CÓMO UTILIZAR ESTA GUÍA", [
+                "Los hoteles están ordenados por provincias. Cada provincia "
+                "empieza por su capital y sigue con las demás poblaciones por "
+                "orden alfabético; en cada población, los hoteles van por "
+                "categoría y, dentro de la misma categoría, por orden "
+                "alfabético. En Baleares y Canarias se agrupan además por islas.",
+                "Para encontrar un hotel, consulte el índice que corresponda a "
+                "lo que conozca: la provincia, el nombre del hotel o la población.",
+            ]),
+        ],
+        "indices": "ÍNDICE DE ÍNDICES",
+    },
+    "en": {
+        "secciones": [
+            ("PRESENTATION AND PURPOSE OF THIS GUIDE", [
+                "Guide to the legally authorized hotels in Spain, with their "
+                "name, category, number of rooms, postal address, telephone "
+                "number and official website, so that the reader can contact "
+                "or look them up quickly.",
+            ]),
+            ("HOW TO USE THIS GUIDE", [
+                "Hotels are arranged by province. Each province opens with its "
+                "capital, followed by the other towns in alphabetical order; "
+                "within each town, hotels are listed by category and, within "
+                "the same category, alphabetically. In the Balearic and Canary "
+                "Islands they are also grouped by island.",
+                "To find a hotel, use the index that matches what you know: the "
+                "province, the name of the hotel or the town.",
+            ]),
+        ],
+        "indices": "INDEX OF INDEXES",
+    },
+}
+
+# Filas de la caja de índices. La página se rellena tras la pasada 1 (la del
+# catálogo es un rango "primera-última").
+ENTRADAS_PRESENTACION = [
+    {"clave": "indice",
+     "es": "Índice nº 1: provincias de España y sus capitales",
+     "en": "Index no. 1: provinces of Spain and their capitals"},
+    {"clave": "catalogo",
+     "es": "Guía de hoteles, ordenados por provincias",
+     "en": "Hotel guide, arranged by province"},
+    {"clave": "hoteles",
+     "es": "Índice nº 2: hoteles por orden alfabético",
+     "en": "Index no. 2: hotels in alphabetical order"},
+    {"clave": "poblaciones",
+     "es": "Índice nº 3: ciudades y localidades por orden alfabético",
+     "en": "Index no. 3: cities and towns in alphabetical order"},
+]
+for _e in ENTRADAS_PRESENTACION:
+    _e["pagina"] = None
+
+FONT_PRES_SUBTITULO = 8.0
+FONT_PRES_TEXTO = 7.0
+ALTO_PRES_LINEA = 3.3
+AIRE_PARRAFO = 1.2          # entre párrafos de una misma sección
+AIRE_SECCION = 3.0          # entre una sección y el rótulo de la siguiente
 
 
-def _tamano_jpeg(ruta):
-    """Ancho y alto en píxeles de un JPEG, leyendo solo su cabecera.
-
-    Hace falta para centrar el mapa en la página ANTES de dibujarlo. Se lee a
-    mano para no arrastrar una librería de imágenes por dos números: basta con
-    recorrer los marcadores del fichero hasta el SOF, que es donde el formato
-    guarda las dimensiones.
-    """
-    with open(ruta, "rb") as f:
-        if f.read(2) != SOI:
-            raise ValueError(f"{ruta} no es un JPEG")
-        while True:
-            byte = f.read(1)
-            while byte and byte != MARCA:
-                byte = f.read(1)
-            marcador = f.read(1)
-            while marcador == MARCA:          # relleno entre marcadores
-                marcador = f.read(1)
-            if not marcador:
-                raise ValueError(f"no se encontró el tamaño en {ruta}")
-            # Los SOF (0xC0-0xCF) llevan las dimensiones, menos DHT, JPG y DAC
-            if 0xC0 <= marcador[0] <= 0xCF and marcador[0] not in (0xC4, 0xC8, 0xCC):
-                f.read(3)                     # longitud (2) + precisión (1)
-                alto = int.from_bytes(f.read(2), "big")
-                ancho = int.from_bytes(f.read(2), "big")
-                return ancho, alto
-            longitud = int.from_bytes(f.read(2), "big")
-            f.seek(longitud - 2, 1)
+def _parrafo(pdf, x, y, texto, dibujar):
+    """Párrafo justificado a todo el ancho; devuelve la Y de debajo. Con
+    `dibujar=False` solo mide, para poder centrar la página antes de pintar."""
+    pdf.set_font(FUENTE, "", FONT_PRES_TEXTO)
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_xy(x, y)
+    lineas = pdf.multi_cell(CONTENT_WIDTH, ALTO_PRES_LINEA, _enc(texto),
+                            align="J", dry_run=not dibujar, output="LINES")
+    return y + len(lineas) * ALTO_PRES_LINEA
 
 
-def render_pagina_mapa(pdf):
-    """Página del mapa político, detrás de los dos índices.
+def _bloque_presentacion(pdf, x, y, idioma, w_pag, dibujar):
+    """Un idioma entero: sus secciones de texto y la caja de índices."""
+    textos = PRESENTACION[idioma]
+    for rotulo, parrafos in textos["secciones"]:
+        if dibujar:
+            _rotulo_seccion(pdf, x, y, [rotulo])
+        y += ALTO_ROTULO + AIRE_ROTULO
+        for i, parrafo in enumerate(parrafos):
+            if i:
+                y += AIRE_PARRAFO
+            y = _parrafo(pdf, x, y, parrafo, dibujar)
+        y += AIRE_SECCION
+    if dibujar:
+        _rotulo_seccion(pdf, x, y, [textos["indices"]])
+    y += ALTO_ROTULO + AIRE_ROTULO
+    filas = [(e[idioma], e["pagina"]) for e in ENTRADAS_PRESENTACION]
+    if dibujar:
+        return _caja_con_paginas(pdf, x, y, filas, w_pag)
+    return y + len(filas) * ALTO_FINAL
 
-    Es una sola página con los títulos en los dos idiomas: el mapa es el mismo
-    para ambos, así que duplicarlo solo gastaría papel. No cuesta ninguna
-    página de más frente a no ponerlo, porque el catálogo arranca siempre en
-    impar y el script metería igualmente una hoja de relleno.
-    """
+
+def render_pagina_presentacion(pdf):
+    """Página de presentación, bilingüe: español arriba e inglés abajo, y el
+    conjunto centrado en vertical. Devuelve las páginas ocupadas (1)."""
     pdf.provincia_actual = None
     pdf.provincia_continuacion = False
-    pdf.pie_forzado = False          # el número va arriba, como en el índice
+    pdf.pie_forzado = False
     pdf.add_page()
-    _folio_superior(pdf)
-
-    ancho_px, alto_px = _tamano_jpeg(MAPA_IMAGEN)
-    alto_img = CONTENT_WIDTH * alto_px / ancho_px
-    alto_es, alto_en = 9.0, 6.0
-
-    # Centrado en el hueco que queda bajo el folio
-    arriba = Y_TOP + 6.0
-    y = arriba + max(0.0, (Y_LIMIT - arriba - alto_es - alto_en - alto_img) / 2)
     x = x_contenido(pdf.page_no())
 
-    # Mismo cuerpo, color y negrita que el título del índice, para que las
-    # páginas de los preliminares se lean como un conjunto
+    # La columna de páginas tiene que admitir el rango del catálogo
+    pdf.set_font(FUENTE, "B", FONT_IDX_FINAL)
+    w_pag = pdf.get_string_width("000-000") + 2 * PAD_CELDA
+
+    alto_cabecera = ALTO_TITULO + ALTO_ROTULO + AIRE_TITULO
+    alto_idioma = _bloque_presentacion(pdf, x, 0, "es", w_pag, False)
+    alto_en = _bloque_presentacion(pdf, x, 0, "en", w_pag, False)
+    total = alto_cabecera + alto_idioma + alto_en
+    hueco = AIRE_TITULO * 2       # entre el bloque español y el inglés
+    arriba = Y_TOP + 6.0
+    y = arriba + max(0.0, (Y_LIMIT - arriba - total - hueco) / 3)
+    if total + hueco > Y_LIMIT - arriba:
+        print("AVISO: la página de presentación no cabe; acortar los textos")
+
+    # Título: la marca en el azul del índice y, debajo, el nombre bilingüe
+    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
     pdf.set_text_color(*AZUL_ACENTO)
     pdf.set_xy(x, y)
-    pdf.set_font(FUENTE, "B", FONT_IDX_TITULO)
-    pdf.cell(CONTENT_WIDTH, alto_es, _enc(TITULO_MAPA_ES), align="C")
-    pdf.set_xy(x, y + alto_es)
-    pdf.set_font(FUENTE, "B", FONT_MAPA_TITULO_EN)
-    pdf.cell(CONTENT_WIDTH, alto_en, _enc(TITULO_MAPA_EN), align="C")
-    pdf.set_text_color(0, 0, 0)
+    pdf.cell(CONTENT_WIDTH, ALTO_TITULO, _enc(MARCA_GUIA), align="C")
+    pdf.set_font(FUENTE, "B", FONT_PRES_SUBTITULO)
+    pdf.set_text_color(*TINTA_SECCION)
+    pdf.set_xy(x, y + ALTO_TITULO)
+    pdf.cell(CONTENT_WIDTH, ALTO_ROTULO, _enc(SUBTITULO_GUIA), align="C")
+    y += alto_cabecera + max(0.0, (Y_LIMIT - arriba - total - hueco) / 3)
 
-    pdf.image(MAPA_IMAGEN, x=x, y=y + alto_es + alto_en, w=CONTENT_WIDTH)
+    y = _bloque_presentacion(pdf, x, y, "es", w_pag, True)
+    y += hueco
+    _bloque_presentacion(pdf, x, y, "en", w_pag, True)
+
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_line_width(0.2)
     return 1
 
 
 def render_indice_general(pdf, entradas):
-    """Preliminares del libro: la página bilingüe de provincias y la del mapa
-    político.
+    """Preliminares del libro: la presentación (si está activada) y la página
+    bilingüe de provincias. El mapa político ya no va dentro: está en la
+    cubierta y repetirlo era redundante.
 
     Devuelve el número total de páginas que han ocupado."""
-    return render_pagina_indice(pdf, entradas) + render_pagina_mapa(pdf)
+    paginas = render_pagina_presentacion(pdf) if SHOW_PRESENTACION else 0
+    return paginas + render_pagina_indice(pdf, entradas)
 
 
 # ---- Cuántas páginas ocupa el índice general (se necesita ANTES de medir) ----
@@ -1793,7 +2096,6 @@ del _scratch_indice
 # Páginas fijas antes del catálogo: [portada opc.] + [intro opc.] + índice general.
 paginas_fijas_antes = (
     (1 if SHOW_PORTADA else 0)
-    + (1 if SHOW_SEGUNDA_PAGINA else 0)
     + N_PAGINAS_INDICE
 )
 # La portada azul del catálogo se fuerza a página IMPAR y lleva reverso blanco,
@@ -1809,7 +2111,8 @@ _scratch.set_font(FUENTE, "", 9)
 _scratch.provincia_actual = None  # sin cabecera/pie en las páginas fijas dummy
 for _ in range(paginas_fijas_antes):
     _scratch.add_page()
-prov_pages_real, _hotel_pages_m, _loc_pages_m = render_catalogo(_scratch)
+prov_pages_real, isla_pages_real, _hotel_pages_m, _loc_pages_m = render_catalogo(_scratch)
+_ultima_catalogo = _scratch.page_no()
 # Las dos secciones finales también se miden aquí: el índice general anuncia en
 # qué página empiezan, y eso solo se sabe tras dibujar el catálogo entero.
 _pag_hoteles, _pag_poblaciones = render_secciones_finales(
@@ -1820,10 +2123,23 @@ del _scratch
 # Índice general con las páginas REALES
 for item in indice_provincias:
     prov = item["provincia"]
-    if prov in prov_pages_real:
+    if item.get("isla"):
+        item["pagina"] = isla_pages_real.get((prov, item["isla"]))
+    elif prov in prov_pages_real:
         item["pagina"] = prov_pages_real[prov]
 ENTRADAS_FINALES[0]["pagina"] = _pag_hoteles
 ENTRADAS_FINALES[1]["pagina"] = _pag_poblaciones
+
+# Página de presentación: el índice va justo detrás de ella
+_pag_indice = (1 if SHOW_PORTADA else 0) + (1 if SHOW_PRESENTACION else 0) + 1
+_paginas_presentacion = {
+    "indice": _pag_indice,
+    "catalogo": f"{min(prov_pages_real.values())}-{_ultima_catalogo}",
+    "hoteles": _pag_hoteles,
+    "poblaciones": _pag_poblaciones,
+}
+for _e in ENTRADAS_PRESENTACION:
+    _e["pagina"] = _paginas_presentacion[_e["clave"]]
 
 # ---- PASADA 2: generar el PDF completo en orden correcto ----
 
@@ -1844,17 +2160,7 @@ if SHOW_PORTADA:
     except Exception as e:
         print(f"No se pudo cargar portada.jpg: {e}")
 
-# Añadir página de presentación (Segunda-pagina.jpg) solo si está activada
-if SHOW_SEGUNDA_PAGINA:
-    try:
-        pdf.add_page()
-        PAGE_W = pdf.w
-        PAGE_H = pdf.h
-        pdf.image("Segunda-pagina.jpg", x=0, y=0, w=PAGE_W, h=PAGE_H)
-    except Exception as e:
-        print(f"No se pudo cargar Segunda-pagina.jpg: {e}")
-
-# --- ÍNDICE GENERAL (español y después inglés) ---
+# --- PRELIMINARES: presentación e índice general ---
 _paginas_indice = render_indice_general(pdf, entradas_indice)
 if _paginas_indice != N_PAGINAS_INDICE:
     print(f"AVISO: el índice ocupa {_paginas_indice} páginas y se habían "
@@ -1864,13 +2170,14 @@ if _paginas_indice != N_PAGINAS_INDICE:
 nueva_portada_seccion(pdf, PORTADA_CATALOGO_ES, PORTADA_CATALOGO_EN)
 
 # --- GENERAR CATÁLOGO (pasada 2, render final; páginas idénticas a la pasada 1) ---
-prov_pages_final, hotel_pages, loc_pages = render_catalogo(pdf)
+prov_pages_final, isla_pages_final, hotel_pages, loc_pages = render_catalogo(pdf)
 
 # --- SECCIONES FINALES: índices alfabéticos de hoteles y de poblaciones ---
 pag_hoteles, pag_poblaciones = render_secciones_finales(pdf, hotel_pages, loc_pages)
 
 # --- COMPROBACIÓN: las dos pasadas tienen que coincidir página a página ---
 _desajustes = [p for p, n in prov_pages_final.items() if prov_pages_real.get(p) != n]
+_desajustes += [k for k, n in isla_pages_final.items() if isla_pages_real.get(k) != n]
 if _desajustes or (pag_hoteles, pag_poblaciones) != (_pag_hoteles, _pag_poblaciones):
     print(f"AVISO: el índice no cuadra con el catálogo ({len(_desajustes)} provincias "
           f"desplazadas). Revisar la paginación.")
@@ -1886,6 +2193,6 @@ print(f"PDF generado: {PDF_FILE} - {pdf.page_no()} páginas, "
       f"{PAGE_WIDTH:.2f} x {PAGE_HEIGHT:.2f} mm "
       f"({PAGE_WIDTH / 25.4:.3f}\" x {PAGE_HEIGHT / 25.4:.3f}\") "
       f"{'CON sangrado' if CON_SANGRADO else 'SIN sangrado'}")
-print(f"Preliminares: {N_PAGINAS_INDICE} páginas (índice bilingüe y mapa). "
+print(f"Preliminares: {N_PAGINAS_INDICE} páginas (presentación e índice). "
       f"Catálogo desde la {min(prov_pages_final.values())}, "
       f"hoteles A-Z en la {pag_hoteles}, poblaciones A-Z en la {pag_poblaciones}.")

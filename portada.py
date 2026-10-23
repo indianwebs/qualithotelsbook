@@ -1,19 +1,17 @@
 """Genera la cubierta completa (contraportada + lomo + portada) para KDP.
 
-Medidas tomadas del calculador oficial de KDP para:
-    tapa blanda | tinta blanco y negro | papel blanco | 6" x 9" | 524 paginas
+Medidas del calculador oficial de KDP (tapa blanda, 6" x 9"):
 
-    Portada completa ....... 341,12 x 234,95 mm
     Portada / contraportada  152,40 x 228,60 mm cada una
-    Lomo ................... 29,97 mm
-    Zona segura del lomo ... 26,80 x 222,25 mm
+    Lomo ................... paginas x grosor de hoja del papel elegido
     Sangrado ............... 3,17 mm por los cuatro bordes exteriores
     Margen de seguridad .... 3,17 mm desde el corte
     Codigo de barras ....... 50,8 x 30,5 mm libres en la esquina inferior
                              derecha de la contraportada, a 6,35 mm del borde
 
-Si cambia el numero de paginas del interior basta con tocar PAGINAS: el lomo y
-el ancho total se recalculan solos.
+El numero de paginas se lee del PDF interior (catalogo_hoteles.pdf) y el de
+hoteles, del Excel: hay que generar el interior ANTES que la cubierta, y
+entonces el lomo y el ancho total salen siempre cuadrados con el libro.
 """
 
 import base64
@@ -21,12 +19,17 @@ import io
 import os
 import re
 
+import pandas as pd
 from fpdf import FPDF
+from pypdf import PdfReader
 
 # ---------------------------------------------------------------------------
 # PARAMETROS DEL LIBRO
 # ---------------------------------------------------------------------------
-PAGINAS = 524
+INTERIOR = "catalogo_hoteles.pdf"
+EXCEL = "excel1.xlsx"
+PAGINAS = len(PdfReader(INTERIOR).pages)
+N_HOTELES = len(pd.read_excel(EXCEL))
 # Debe coincidir EXACTAMENTE con "Tinta y tipo de papel" en KDP: cada opcion
 # tiene un grosor de hoja distinto y por tanto un lomo distinto.
 PAPEL = "color_estandar"      # negro_blanco | negro_crema | color_estandar | color_premium
@@ -36,8 +39,8 @@ MAPA_SVG = "mapa_espana_qualithotelsbook.svg"
 GROSOR_HOJA = {          # pulgadas de grosor por pagina, tabla oficial de KDP
     "negro_blanco": 0.002252,
     "negro_crema": 0.0025,
-    "color_estandar": 0.002347,
-    "color_premium": 0.002252,
+    "color_estandar": 0.002252,
+    "color_premium": 0.002347,
 }
 
 MM = 25.4
@@ -83,7 +86,16 @@ BEIGE = (219, 205, 174)    # beige de la cubierta
 MARCA = "QualitHotelsBook"
 TITULO_ES = "GUIA DE HOTELES DE ESPAÑA"
 TITULO_EN = "SPAIN HOTELS GUIDE"
-FECHA = "Octubre 2026"
+FECHA = "Noviembre 2026"
+
+
+def _miles(n, sep):
+    return f"{n:,}".replace(",", sep)
+
+
+# Pie de la portada, en pequeño: cuántos hoteles trae la guía
+LINEA_HOTELES = (f"Contiene {_miles(N_HOTELES, '.')} hoteles"
+                 f"  -  Contains {_miles(N_HOTELES, ',')} hotels")
 
 CONTRA_ES = [
     ("p", "Contiene el nombre, dirección y datos principales de los hoteles "
@@ -188,7 +200,10 @@ PORTADA = {
                       sufijo="®"),
     "titulo_es": dict(texto=TITULO_ES, estilo="B",  cap_top=34.92, ancho=122.57),
     "titulo_en": dict(texto=TITULO_EN, estilo="B",  cap_top=50.98, ancho=116.55),
-    "fecha":     dict(texto=FECHA, estilo="BI", cap_top=66.81, ancho=35.72),
+    # El ancho se midio sobre "Octubre 2026": se usa para sacar el cuerpo de
+    # letra y la fecha real se escribe con ese cuerpo, sea cual sea su largo.
+    "fecha":     dict(texto=FECHA, estilo="BI", cap_top=66.81, ancho=35.72,
+                      referencia="Octubre 2026"),
     # 144 mm es practicamente el techo: el margen de seguridad deja 146.05 y
     # el PNG del SVG (1728 px) baja de los 300 ppp que pide KDP a partir de 146.
     "mapa":      dict(top=82.00, ancho=144.00),
@@ -385,7 +400,8 @@ def construir():
             natural = pdf.get_string_width(m["texto"])
             tracking = (m["ancho"] - natural) / max(len(m["texto"]) - 1, 1)
         else:
-            size = tamano_por_ancho(pdf, m["texto"], m["estilo"], m["ancho"],
+            size = tamano_por_ancho(pdf, m.get("referencia", m["texto"]),
+                                    m["estilo"], m["ancho"],
                                     sufijo=m.get("sufijo"))
         cuerpos[clave] = size
         linea_portada(pdf, cxp, Y0 + m["cap_top"], m["texto"], m["estilo"],
@@ -400,6 +416,11 @@ def construir():
     # `top` es donde debe empezar el DIBUJO, no la caja de la imagen
     y_mapa = Y0 + m["top"] - mapa_offset * mapa_alto
     pdf.image(mapa, x=cxp - mapa_ancho / 2, y=y_mapa, w=mapa_ancho, h=mapa_alto)
+
+    # Número de hoteles, pequeño y al pie, apoyado en el margen de seguridad
+    alto_hoteles = 4.0
+    texto_centrado(pdf, PORT_X0, TRIM_W, Y1 - SEGURIDAD - 2.0 - alto_hoteles,
+                   LINEA_HOTELES, "serif", "I", 9, NEGRO, alto=alto_hoteles)
 
     pdf.output(SALIDA)
     os.remove(mapa)
