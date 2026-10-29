@@ -210,7 +210,9 @@ ISLAS = {
             "FORMENTERA", "SANT FRANCESC XAVIER",
         }),
     ],
-    "LASPALMAS": [
+    # Canarias va como un solo bloque, con las islas de Las Palmas primero y
+    # las de Santa Cruz de Tenerife después.
+    "ISLASCANARIAS": [
         ("Gran Canaria", "Las Palmas de Gran Canaria", {
             "AGAETE", "AGUIMES", "ARTENARA", "ARUCAS", "FIRGAS", "GALDAR",
             "INGENIO", "LA ALDEA DE SAN NICOLAS", "LAS PALMAS DE GRAN CANARIA",
@@ -227,8 +229,6 @@ ISLAS = {
             "ANTIGUA", "BETANCURIA", "LA OLIVA", "PAJARA",
             "PUERTO DEL ROSARIO", "TUINEJE",
         }),
-    ],
-    "SANTACRUZDETENERIFE": [
         ("Tenerife", "Santa Cruz de Tenerife", {
             "ADEJE", "ARAFO", "ARICO", "ARONA", "BUENAVISTA DEL NORTE",
             "CANDELARIA", "EL ROSARIO", "EL SAUZAL", "EL TANQUE", "FASNIA",
@@ -275,6 +275,42 @@ def isla_de(row):
     return len(ISLAS[clave]) + 1, ""
 
 
+# ---------------------------------------------------------------------------
+# ESPAÑA INSULAR Y CIUDADES AUTÓNOMAS, AL FINAL
+# ---------------------------------------------------------------------------
+# A petición del cliente, el cuerpo de la guía son solo las provincias
+# peninsulares, de A Coruña a Zaragoza. Detrás, tras una portada azul propia,
+# van Baleares, Canarias (un único bloque, ya no Las Palmas y Santa Cruz de
+# Tenerife por separado), Ceuta y Melilla, en ese orden.
+#
+# Va DESPUÉS de ES_CAPITAL, que necesita la provincia original para saber que
+# Las Palmas de Gran Canaria y Santa Cruz de Tenerife son capitales.
+PROVINCIA_CANARIAS = "ISLAS CANARIAS"
+df["PROVINCIA"] = df["PROVINCIA"].replace({
+    "LAS PALMAS": PROVINCIA_CANARIAS,
+    "SANTA CRUZ DE TENERIFE": PROVINCIA_CANARIAS,
+})
+
+ORDEN_FINAL = {"ISLASBALEARES": 1, "ISLASCANARIAS": 2, "CEUTA": 3, "MELILLA": 4}
+
+
+def orden_grupo(provincia):
+    """0 para las peninsulares; 1-4 para los bloques que van al final."""
+    return ORDEN_FINAL.get(normalizar_provincia(provincia).replace(" ", ""), 0)
+
+
+def titulo_cabecera(provincia):
+    """Cabecera de las páginas del catálogo: los archipiélagos y las ciudades
+    autónomas no son "PROVINCIA DE ..."."""
+    clave = normalizar_provincia(provincia).replace(" ", "")
+    if clave in ISLAS:
+        return provincia.upper()
+    if clave in ("CEUTA", "MELILLA"):
+        return f"CIUDAD AUTÓNOMA DE {provincia.upper()}"
+    return f"PROVINCIA DE {provincia.upper()}"
+
+
+df["GRUPO_ORDEN"] = df["PROVINCIA"].map(orden_grupo)
 df[["ISLA_ORDEN", "ISLA"]] = df.apply(isla_de, axis=1, result_type="expand")
 
 # Columna auxiliar para ordenar por nombre limpio (sin "HOTEL" al inicio, sin tildes)
@@ -290,13 +326,14 @@ def _nombre_orden(x):
 
 df["NOMBRE_ORDEN"] = df["NOMBRE DE EMPRESA"].apply(_nombre_orden)
 
-# Ordenar por: provincia → isla → ES_CAPITAL (True primero) → localidad → estrellas descendentes → nombre alfabético
+# Ordenar por: península/islas/ciudades → provincia → isla → ES_CAPITAL (True primero) → localidad → estrellas descendentes → nombre alfabético
 df = df.sort_values(
-    by=["PROVINCIA", "ISLA_ORDEN", "ES_CAPITAL", "LOCALIDAD", "ESTRELLAS", "NOMBRE_ORDEN"],
+    by=["GRUPO_ORDEN", "PROVINCIA", "ISLA_ORDEN", "ES_CAPITAL", "LOCALIDAD",
+        "ESTRELLAS", "NOMBRE_ORDEN"],
     key=lambda col: (
         col.map(normalizar_provincia) if col.name in ["PROVINCIA", "LOCALIDAD"] else col
     ),
-    ascending=[True, True, False, True, False, True],
+    ascending=[True, True, True, False, True, False, True],
 )
 
 
@@ -355,7 +392,7 @@ class PDF(FPDF):
         self.set_font(FUENTE, "B", FONT_CABECERA)
         self.set_text_color(*AZUL_PORTADA)
         # Agregar "(cont)" si esta es una página de continuación
-        provincia_text = f"PROVINCIA DE {self.provincia_actual.upper()}"
+        provincia_text = titulo_cabecera(self.provincia_actual)
         if getattr(self, "provincia_continuacion", False):
             provincia_text += " (cont.)"
         self.cell(
@@ -837,6 +874,20 @@ def nueva_portada_seccion(pdf, lineas_es, lineas_en):
     return pagina_portada
 
 # --- TEXTOS DE LAS PORTADAS AZULES (exactos de las fotos) ---
+# Portada que separa la España peninsular de las islas y las ciudades
+# autónomas, que van al final del catálogo.
+PORTADA_INSULAR_ES = [
+    "ISLAS BALEARES",
+    "ISLAS CANARIAS",
+    "CIUDADES AUTÓNOMAS",
+    "DE CEUTA Y MELILLA",
+]
+PORTADA_INSULAR_EN = [
+    "BALEARIC ISLANDS",
+    "CANARY ISLANDS",
+    "AUTONOMOUS CITIES",
+    "OF CEUTA AND MELILLA",
+]
 PORTADA_CATALOGO_ES = [
     "GUIA DE HOTELES DE ESPAÑA",
     "ORDENADOS POR PROVINCIAS.",
@@ -893,6 +944,9 @@ PORTADA_POBLACIONES_EN = [
 #   tipo       ""       provincia
 #              "uni"    Comunidad Autónoma uniprovincial
 #              "ciudad" Ciudad Autónoma (Ceuta y Melilla)
+# Canarias tiene dos capitales, que comparten la sede del Gobierno canario.
+CAPITAL_CANARIAS = "Las Palmas de G. C. / S. C. de Tenerife"
+
 INDICE_PROVINCIAS = {
     "ACORUNA":             ("A Coruña", "", "A Coruña", ""),
     "ALBACETE":            ("Albacete", "", "Albacete", ""),
@@ -926,7 +980,6 @@ INDICE_PROVINCIAS = {
                             "Palma de Mallorca", "uni"),
     "JAEN":                ("Jaén", "", "Jaén", ""),
     "LARIOJA":             ("La Rioja", "", "Logroño", "uni"),
-    "LASPALMAS":           ("Las Palmas", "", "Las Palmas de Gran Canaria", ""),
     "LEON":                ("León", "", "León", ""),
     "LLEIDA":              ("Lleida", "", "Lleida (Lérida)", ""),
     "LUGO":                ("Lugo", "", "Lugo", ""),
@@ -939,8 +992,8 @@ INDICE_PROVINCIAS = {
     "PALENCIA":            ("Palencia", "", "Palencia", ""),
     "PONTEVEDRA":          ("Pontevedra", "", "Pontevedra", ""),
     "SALAMANCA":           ("Salamanca", "", "Salamanca", ""),
-    "SANTACRUZDETENERIFE": ("Santa Cruz de Tenerife", "",
-                            "Santa Cruz de Tenerife", ""),
+    "ISLASCANARIAS":       ("Islas Canarias", "the Canary Islands",
+                            CAPITAL_CANARIAS, "uni"),
     "SEGOVIA":             ("Segovia", "", "Segovia", ""),
     "SEVILLA":             ("Sevilla", "", "Sevilla", ""),
     "SORIA":               ("Soria", "", "Soria", ""),
@@ -978,8 +1031,7 @@ ETIQUETA_CIUDAD_AUT = "Ciudad autónoma"
 # general y las agrupa por archipiélago, como en la guía impresa.
 GRUPO_INSULAR = {
     "ISLASBALEARES":       "baleares",
-    "LASPALMAS":           "canarias",
-    "SANTACRUZDETENERIFE": "canarias",
+    "ISLASCANARIAS":       "canarias",
 }
 
 
@@ -1087,7 +1139,9 @@ def alto_real_localidad(pdf, localidad):
 def render_catalogo(pdf):
     """Dibuja TODO el catálogo por provincias en `pdf`.
 
-    Devuelve (prov_pages, isla_pages, hotel_pages, loc_pages): la página REAL
+    Devuelve (prov_pages, isla_pages, hotel_pages, loc_pages, secciones), esta
+    última (última página peninsular, portada azul de las islas y ciudades
+    autónomas), que separa los dos bloques. Las demás llevan la página REAL
     de la primera aparición de cada provincia, isla (clave (provincia, isla))
     y localidad (clave (localidad, provincia): Torrent o Sobrado existen en dos
     provincias), y TODAS las páginas de cada nombre de hotel (nombre limpio),
@@ -1105,6 +1159,7 @@ def render_catalogo(pdf):
     """
     prov_pages = {}
     isla_pages = {}
+    pag_insular = fin_peninsular = None
     hotel_pages = {}
     loc_pages = {}
 
@@ -1189,6 +1244,12 @@ def render_catalogo(pdf):
             # La columna a medias de la provincia anterior se vuelca ANTES de
             # cambiar de página, o su contenido caería en la página siguiente.
             volcar_columna(current_col, completa=False)
+            # Al acabar la península (tras Zaragoza), la portada azul de
+            # Baleares, Canarias, Ceuta y Melilla.
+            if pag_insular is None and row["GRUPO_ORDEN"] > 0:
+                fin_peninsular = pdf.page_no()
+                pag_insular = nueva_portada_seccion(
+                    pdf, PORTADA_INSULAR_ES, PORTADA_INSULAR_EN)
             provincia_anterior = provincia
             isla_anterior = isla
             localidad_anterior = ""
@@ -1285,7 +1346,8 @@ def render_catalogo(pdf):
     volcar_columna(current_col, completa=False)
 
     pdf.isla_actual = ""
-    return prov_pages, isla_pages, hotel_pages, loc_pages
+    return (prov_pages, isla_pages, hotel_pages, loc_pages,
+            (fin_peninsular, pag_insular))
 
 
 # ---------------------------------------------------------------------------
@@ -1938,11 +2000,14 @@ PRESENTACION = {
                 "lector una rápida comunicación o consulta.",
             ]),
             ("CÓMO UTILIZAR ESTA GUÍA", [
-                "Los hoteles están ordenados por provincias. Cada provincia "
-                "empieza por su capital y sigue con las demás poblaciones por "
-                "orden alfabético; en cada población, los hoteles van por "
-                "categoría y, dentro de la misma categoría, por orden "
-                "alfabético. En Baleares y Canarias se agrupan además por islas.",
+                "Los hoteles están ordenados por provincias: primero las de la "
+                "Península, de A Coruña a Zaragoza, y después, en su propia "
+                "sección, las Islas Baleares y las Islas Canarias, agrupadas "
+                "por islas, y las ciudades autónomas de Ceuta y Melilla. Cada "
+                "provincia empieza por su capital y sigue con las demás "
+                "poblaciones por orden alfabético; en cada población, los "
+                "hoteles van por categoría y, dentro de la misma categoría, "
+                "por orden alfabético.",
                 "Para encontrar un hotel, consulte el índice que corresponda a "
                 "lo que conozca: la provincia, el nombre del hotel o la población.",
             ]),
@@ -1958,11 +2023,13 @@ PRESENTACION = {
                 "or look them up quickly.",
             ]),
             ("HOW TO USE THIS GUIDE", [
-                "Hotels are arranged by province. Each province opens with its "
-                "capital, followed by the other towns in alphabetical order; "
-                "within each town, hotels are listed by category and, within "
-                "the same category, alphabetically. In the Balearic and Canary "
-                "Islands they are also grouped by island.",
+                "Hotels are arranged by province: first those of mainland "
+                "Spain, from A Coruña to Zaragoza, and then, in a section of "
+                "their own, the Balearic and Canary Islands, grouped by island, "
+                "and the autonomous cities of Ceuta and Melilla. Each province "
+                "opens with its capital, followed by the other towns in "
+                "alphabetical order; within each town, hotels are listed by "
+                "category and, within the same category, alphabetically.",
                 "To find a hotel, use the index that matches what you know: the "
                 "province, the name of the hotel or the town.",
             ]),
@@ -1978,8 +2045,11 @@ ENTRADAS_PRESENTACION = [
      "es": "Índice nº 1: provincias de España y sus capitales",
      "en": "Index no. 1: provinces of Spain and their capitals"},
     {"clave": "catalogo",
-     "es": "Guía de hoteles, ordenados por provincias",
-     "en": "Hotel guide, arranged by province"},
+     "es": "Guía de hoteles: España peninsular, por provincias",
+     "en": "Hotel guide: mainland Spain, by province"},
+    {"clave": "insular",
+     "es": "Guía de hoteles: Islas Baleares, Islas Canarias, Ceuta y Melilla",
+     "en": "Hotel guide: Balearic Islands, Canary Islands, Ceuta and Melilla"},
     {"clave": "hoteles",
      "es": "Índice nº 2: hoteles por orden alfabético",
      "en": "Index no. 2: hotels in alphabetical order"},
@@ -2111,7 +2181,8 @@ _scratch.set_font(FUENTE, "", 9)
 _scratch.provincia_actual = None  # sin cabecera/pie en las páginas fijas dummy
 for _ in range(paginas_fijas_antes):
     _scratch.add_page()
-prov_pages_real, isla_pages_real, _hotel_pages_m, _loc_pages_m = render_catalogo(_scratch)
+(prov_pages_real, isla_pages_real, _hotel_pages_m, _loc_pages_m,
+ _pag_insular) = render_catalogo(_scratch)
 _ultima_catalogo = _scratch.page_no()
 # Las dos secciones finales también se miden aquí: el índice general anuncia en
 # qué página empiezan, y eso solo se sabe tras dibujar el catálogo entero.
@@ -2134,7 +2205,8 @@ ENTRADAS_FINALES[1]["pagina"] = _pag_poblaciones
 _pag_indice = (1 if SHOW_PORTADA else 0) + (1 if SHOW_PRESENTACION else 0) + 1
 _paginas_presentacion = {
     "indice": _pag_indice,
-    "catalogo": f"{min(prov_pages_real.values())}-{_ultima_catalogo}",
+    "catalogo": f"{min(prov_pages_real.values())}-{_pag_insular[0]}",
+    "insular": f"{_pag_insular[1]}-{_ultima_catalogo}",
     "hoteles": _pag_hoteles,
     "poblaciones": _pag_poblaciones,
 }
@@ -2170,7 +2242,8 @@ if _paginas_indice != N_PAGINAS_INDICE:
 nueva_portada_seccion(pdf, PORTADA_CATALOGO_ES, PORTADA_CATALOGO_EN)
 
 # --- GENERAR CATÁLOGO (pasada 2, render final; páginas idénticas a la pasada 1) ---
-prov_pages_final, isla_pages_final, hotel_pages, loc_pages = render_catalogo(pdf)
+(prov_pages_final, isla_pages_final, hotel_pages, loc_pages,
+ pag_insular) = render_catalogo(pdf)
 
 # --- SECCIONES FINALES: índices alfabéticos de hoteles y de poblaciones ---
 pag_hoteles, pag_poblaciones = render_secciones_finales(pdf, hotel_pages, loc_pages)
@@ -2178,7 +2251,8 @@ pag_hoteles, pag_poblaciones = render_secciones_finales(pdf, hotel_pages, loc_pa
 # --- COMPROBACIÓN: las dos pasadas tienen que coincidir página a página ---
 _desajustes = [p for p, n in prov_pages_final.items() if prov_pages_real.get(p) != n]
 _desajustes += [k for k, n in isla_pages_final.items() if isla_pages_real.get(k) != n]
-if _desajustes or (pag_hoteles, pag_poblaciones) != (_pag_hoteles, _pag_poblaciones):
+if _desajustes or (pag_hoteles, pag_poblaciones, pag_insular) != (
+        _pag_hoteles, _pag_poblaciones, _pag_insular):
     print(f"AVISO: el índice no cuadra con el catálogo ({len(_desajustes)} provincias "
           f"desplazadas). Revisar la paginación.")
 
