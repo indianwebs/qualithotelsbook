@@ -66,13 +66,23 @@ Y0, Y1 = SANGRADO, SANGRADO + TRIM_H  # bordes de corte superior e inferior
 # ---------------------------------------------------------------------------
 # TIPOGRAFIA Y COLOR
 # ---------------------------------------------------------------------------
+def _ruta_fuente(windows, mac):
+    """La fuente en Windows o, si no esta, la misma que trae macOS."""
+    for ruta in (f"C:/Windows/Fonts/{windows}",
+                 f"/System/Library/Fonts/Supplemental/{mac}",
+                 f"/Library/Fonts/{mac}"):
+        if os.path.exists(ruta):
+            return ruta
+    return f"C:/Windows/Fonts/{windows}"
+
+
 FUENTES = {
-    ("sans", ""): "C:/Windows/Fonts/arial.ttf",
-    ("sans", "B"): "C:/Windows/Fonts/arialbd.ttf",
-    ("serif", ""): "C:/Windows/Fonts/times.ttf",
-    ("serif", "B"): "C:/Windows/Fonts/timesbd.ttf",
-    ("serif", "I"): "C:/Windows/Fonts/timesi.ttf",
-    ("serif", "BI"): "C:/Windows/Fonts/timesbi.ttf",
+    ("sans", ""): _ruta_fuente("arial.ttf", "Arial.ttf"),
+    ("sans", "B"): _ruta_fuente("arialbd.ttf", "Arial Bold.ttf"),
+    ("serif", ""): _ruta_fuente("times.ttf", "Times New Roman.ttf"),
+    ("serif", "B"): _ruta_fuente("timesbd.ttf", "Times New Roman Bold.ttf"),
+    ("serif", "I"): _ruta_fuente("timesi.ttf", "Times New Roman Italic.ttf"),
+    ("serif", "BI"): _ruta_fuente("timesbi.ttf", "Times New Roman Bold Italic.ttf"),
 }
 
 GRIS = (60, 60, 60)        # texto corrido de la contraportada

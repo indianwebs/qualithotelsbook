@@ -14,7 +14,7 @@ SHOW_PORTADA = False
 
 # Controla si se incluye la página de presentación («Índice de índices»), la
 # primera tras la cubierta. False para que el PDF empiece por el índice.
-SHOW_PRESENTACION = True
+SHOW_PRESENTACION = False
 
 
 def normalizar_provincia(nombre):
@@ -111,6 +111,14 @@ for _id, _campos in CORRECCIONES.items():
     for _col, _valor in _campos.items():
         df.loc[_fila, _col] = _valor
 
+# Algunas localidades traen la isla entre paréntesis, p. ej. "TEGUISE
+# (LANZAROTE)", y salían como una población aparte de "TEGUISE". La isla ya
+# la indica la banda de la página, así que se quita.
+df["LOCALIDAD"] = df["LOCALIDAD"].astype(str).str.replace(
+    r"\s*\((LANZAROTE|EIVISSA|IBIZA|MALLORCA|MENORCA|FORMENTERA|TENERIFE|"
+    r"GRAN CANARIA|FUERTEVENTURA|LA PALMA|LA GOMERA|EL HIERRO)\)\s*$",
+    "", regex=True)
+
 
 # Extraer valor numérico de la clasificación para ordenar por estrellas (5->0)
 def extraer_estrellas(val):
@@ -138,6 +146,26 @@ def normalizar_ciudad(nombre):
     return s.upper()
 
 
+# La misma población escrita con y sin acento ("CALVIÀ" / "CALVIA") salía
+# dos veces seguidas; se unifica con la grafía más frecuente de su provincia.
+df["LOCALIDAD"] = df.groupby(
+    [df["PROVINCIA"], df["LOCALIDAD"].map(normalizar_ciudad)]
+)["LOCALIDAD"].transform(lambda s: s.value_counts().index[0])
+
+
+# Otros nombres con que el Excel escribe una capital (clave = capital
+# normalizada). Sin esto, una provincia o isla cuya capital viene en la otra
+# lengua o por el municipio se quedaba sin capital al principio.
+ALIAS_CAPITAL = {
+    "CASTELLON DE LA PLANA": {"CASTELLO DE LA PLANA", "CASTELLON", "CASTELLO"},
+    "SANT FRANCESC XAVIER": {"FORMENTERA"},
+}
+
+
+def _coincide_capital(loc_norm, cap_norm):
+    return loc_norm == cap_norm or loc_norm in ALIAS_CAPITAL.get(cap_norm, ())
+
+
 # Crear columna ES_CAPITAL: True si la localidad es la capital de su provincia
 def es_capital(row):
     provincia_norm = normalizar_provincia(row.get("PROVINCIA", "")).replace(" ", "")
@@ -156,13 +184,13 @@ def es_capital(row):
         for p in partes:
             if not p:
                 continue
-            if normalizar_ciudad(p) == cap_norm:
+            if _coincide_capital(normalizar_ciudad(p), cap_norm):
                 return True
         return False
 
     # Localidad sin variantes: comparar igualdad exacta tras normalizar
     loc_norm = normalizar_ciudad(localidad)
-    return loc_norm == cap_norm
+    return _coincide_capital(loc_norm, cap_norm)
 
 
 df["ES_CAPITAL"] = df.apply(es_capital, axis=1)
@@ -313,6 +341,24 @@ def titulo_cabecera(provincia):
 df["GRUPO_ORDEN"] = df["PROVINCIA"].map(orden_grupo)
 df[["ISLA_ORDEN", "ISLA"]] = df.apply(isla_de, axis=1, result_type="expand")
 
+
+def es_capital_isla(row):
+    """En los archipiélagos cada isla abre con SU capital, como las provincias.
+
+    "Maó (Mahón)" vale tanto por "MAO" como por "MAHON", y la localidad puede
+    traer variantes ("MAÓ-MAHÓN") o la isla entre paréntesis."""
+    clave = normalizar_provincia(row["PROVINCIA"]).replace(" ", "")
+    if not row["ISLA"]:
+        return row["ES_CAPITAL"]
+    capital = next(c for n, c, _m in ISLAS[clave] if n == row["ISLA"])
+    variantes = {normalizar_ciudad(p) for p in re.split(r"[()]", capital) if p.strip()}
+    loc = re.sub(r"\(.*?\)", "", str(row["LOCALIDAD"]))
+    return any(_coincide_capital(normalizar_ciudad(p), v)
+               for p in re.split(r"[/-]", loc) if p.strip() for v in variantes)
+
+
+df["ES_CAPITAL"] = df.apply(es_capital_isla, axis=1)
+
 # Columna auxiliar para ordenar por nombre limpio (sin "HOTEL" al inicio, sin tildes)
 def _nombre_orden(x):
     s = str(x).strip()
@@ -352,10 +398,20 @@ df = df.sort_values(
 #
 # Si las fuentes no estuvieran disponibles (otro equipo, Linux...), se vuelve
 # a la Helvetica base: el PDF se genera igual, pero KDP volverá a avisar.
+def _ruta_fuente(windows, mac):
+    """La fuente en Windows o, si no está, la misma Arial que trae macOS."""
+    for ruta in (f"C:/Windows/Fonts/{windows}",
+                 f"/System/Library/Fonts/Supplemental/{mac}",
+                 f"/Library/Fonts/{mac}"):
+        if os.path.exists(ruta):
+            return ruta
+    return f"C:/Windows/Fonts/{windows}"
+
+
 _RUTAS_FUENTE = {
-    "": "C:/Windows/Fonts/arial.ttf",
-    "B": "C:/Windows/Fonts/arialbd.ttf",
-    "I": "C:/Windows/Fonts/ariali.ttf",
+    "": _ruta_fuente("arial.ttf", "Arial.ttf"),
+    "B": _ruta_fuente("arialbd.ttf", "Arial Bold.ttf"),
+    "I": _ruta_fuente("ariali.ttf", "Arial Italic.ttf"),
 }
 INCRUSTAR_FUENTE = all(os.path.exists(_r) for _r in _RUTAS_FUENTE.values())
 FUENTE = "Arial" if INCRUSTAR_FUENTE else "Helvetica"
@@ -636,6 +692,15 @@ SEP_HOTELES = 1.2
 # con un hueco anormalmente grande.
 JUSTIFICAR_COLUMNAS = True
 SEP_EXTRA_MAX = 6.0
+
+# Provincia (o isla) que empieza en la misma página que acaba la anterior.
+# Al terminar una provincia, sus hoteles de la última página se reparten en
+# las tres columnas a la misma altura; si debajo quedan al menos
+# HUECO_MIN_PROVINCIA mm libres para hoteles, la siguiente empieza ahí, con su
+# título, en vez de saltar de página. False recupera el salto de siempre.
+COMPARTIR_PAGINA = True
+HUECO_MIN_PROVINCIA = 60.0
+AIRE_ANTES_TITULO = 5.0     # entre la provincia que acaba y el título de la nueva
 # Pequeño colchón para que ninguna línea toque el borde de la mancha
 ancho_texto = COLUMN_WIDTH - 1.5
 
@@ -688,6 +753,8 @@ def construir_lineas_hotel(row):
     partes = []
     if _clasif_ok:
         partes.append(formatear_clasificacion(_clasif))
+    else:
+        partes.append("?*")  # categoría desconocida
     if _hab_ok:
         partes.append(f"{_hab} hab.")
     # Modalidad: siempre precedida de "hotel" (p.ej. "hotel playa"), como en las fotos
@@ -1179,6 +1246,7 @@ def render_catalogo(pdf):
 
     # --- buffer de justificación vertical ---
     buffer = [[] for _ in range(COLS)]
+    completa = [False] * COLS
     y_inicio = [Y_START] * COLS
 
     def dibujar_item(x, y, item):
@@ -1232,6 +1300,98 @@ def render_catalogo(pdf):
         for item in items:
             y = dibujar_item(x, y, item) + sep
 
+    def volcar_pagina():
+        """Vuelca todas las columnas pendientes de la página. Las columnas no
+        se dibujan al cerrarse sino aquí, para poder reequilibrarlas si la
+        provincia acaba en esta página."""
+        for col in range(COLS):
+            volcar_columna(col, completa[col])
+            completa[col] = False
+
+    def reparto_equilibrado(items):
+        """(alto, columnas): reparto de `items`, en orden, en COLS columnas
+        con la menor altura posible."""
+        altos = [it["alto"] for it in items]
+
+        def repartir(h):
+            cols, usado = [[]], None
+            for it, a in zip(items, altos):
+                if usado is not None and usado + SEP_HOTELES + a <= h:
+                    usado += SEP_HOTELES + a
+                else:
+                    if usado is not None:
+                        cols.append([])
+                    if len(cols) > COLS or a > h:
+                        return None
+                    usado = a
+                cols[-1].append(it)
+            return cols
+
+        lo, hi = max(altos), sum(altos) + SEP_HOTELES * len(altos)
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            if repartir(mid) is None:
+                lo = mid
+            else:
+                hi = mid
+        return hi, repartir(hi)
+
+    def alto_titulo(con_provincia, con_isla):
+        """Alto del título de una provincia/isla que empieza a media página,
+        con las mismas medidas que la cabecera de página."""
+        alto = 0.0
+        if con_provincia:
+            alto += Y_LINEA - Y_TOP
+        if con_isla:
+            alto += 1.5 + ALTO_BANDA_ISLA if con_provincia else ALTO_BANDA_ISLA
+        return alto + (Y_START - Y_LINEA)
+
+    def dibujar_titulo(y, provincia, isla, con_provincia):
+        """Título de una provincia/isla que empieza a media página: el mismo
+        rótulo azul y la misma línea (y banda de isla) que la cabecera."""
+        izq = x_contenido(pdf.page_no())
+        if con_provincia:
+            pdf.set_xy(izq, y)
+            pdf.set_font(FUENTE, "B", FONT_CABECERA)
+            pdf.set_text_color(*AZUL_PORTADA)
+            pdf.cell(CONTENT_WIDTH, 5, _enc(titulo_cabecera(provincia)), align="C")
+            y += Y_LINEA - Y_TOP
+            pdf.set_draw_color(180, 180, 180)
+            pdf.set_line_width(0.2)
+            pdf.line(izq, y, izq + CONTENT_WIDTH, y)
+            if isla:
+                y += 1.5
+        if isla:
+            pdf.set_fill_color(*AZUL_ACENTO)
+            pdf.rect(izq, y, CONTENT_WIDTH, ALTO_BANDA_ISLA, style="F")
+            pdf.set_font(FUENTE, "B", FONT_BANDA_ISLA)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_xy(izq, y)
+            pdf.cell(CONTENT_WIDTH, ALTO_BANDA_ISLA,
+                     _enc(f"ISLA DE {isla.upper()}"), align="C")
+        pdf.set_text_color(0, 0, 0)
+
+    def hueco_para(provincia, isla, cambio_provincia):
+        """Si la nueva provincia/isla cabe en esta página, reequilibra las
+        columnas de la que acaba, dibuja el título y devuelve la Y donde
+        empiezan sus hoteles. Si no cabe, None y no toca nada."""
+        items = [it for col in buffer for it in col]
+        if not COMPARTIR_PAGINA or not items:
+            return None
+        if len({y_inicio[c] for c in range(COLS)}) != 1:
+            return None
+        alto, cols = reparto_equilibrado(items)
+        y_titulo = y_inicio[0] + alto + AIRE_ANTES_TITULO
+        y_hoteles = y_titulo + alto_titulo(cambio_provincia, bool(isla))
+        if Y_LIMIT - y_hoteles < HUECO_MIN_PROVINCIA:
+            return None
+        for c in range(COLS):
+            buffer[c] = cols[c] if c < len(cols) else []
+            completa[c] = False
+        volcar_pagina()
+        dibujar_titulo(y_titulo, provincia, isla, cambio_provincia)
+        return y_hoteles
+
     for idx, row in df.iterrows():
         provincia = str(row["PROVINCIA"])
         localidad = str(row["LOCALIDAD"])
@@ -1241,28 +1401,39 @@ def render_catalogo(pdf):
         # CAMBIO DE PROVINCIA O DE ISLA → NUEVA PÁGINA Y RESET DE ALTURAS
         cambio_provincia = provincia != provincia_anterior
         if cambio_provincia or isla != isla_anterior:
-            # La columna a medias de la provincia anterior se vuelca ANTES de
-            # cambiar de página, o su contenido caería en la página siguiente.
-            volcar_columna(current_col, completa=False)
             # Al acabar la península (tras Zaragoza), la portada azul de
-            # Baleares, Canarias, Ceuta y Melilla.
-            if pag_insular is None and row["GRUPO_ORDEN"] > 0:
-                fin_peninsular = pdf.page_no()
-                pag_insular = nueva_portada_seccion(
-                    pdf, PORTADA_INSULAR_ES, PORTADA_INSULAR_EN)
+            # Baleares, Canarias, Ceuta y Melilla: ahí siempre página nueva.
+            toca_portada = pag_insular is None and row["GRUPO_ORDEN"] > 0
+            y_hoteles = None
+            if provincia_anterior and not toca_portada:
+                y_hoteles = hueco_para(provincia, isla, cambio_provincia)
+            if y_hoteles is None:
+                # La provincia anterior se vuelca ANTES de cambiar de página,
+                # o su contenido caería en la página siguiente.
+                volcar_pagina()
+                if toca_portada:
+                    fin_peninsular = pdf.page_no()
+                    pag_insular = nueva_portada_seccion(
+                        pdf, PORTADA_INSULAR_ES, PORTADA_INSULAR_EN)
             provincia_anterior = provincia
             isla_anterior = isla
             localidad_anterior = ""
             pdf.provincia_actual = provincia
             pdf.isla_actual = isla
-            # Una isla nueva dentro de la misma provincia es continuación de
-            # la provincia: la cabecera lo dice y la banda nombra la isla.
-            pdf.provincia_continuacion = not cambio_provincia
-            pdf.add_page()
-            x_positions = columnas(pdf.page_no())
             current_col = 0
-            y_actual = [y_arranque(pdf)] * COLS
-            y_inicio = [y_arranque(pdf)] * COLS
+            if y_hoteles is None:
+                # Una isla nueva dentro de la misma provincia es continuación
+                # de la provincia: la cabecera lo dice y la banda nombra la isla.
+                pdf.provincia_continuacion = not cambio_provincia
+                pdf.add_page()
+                x_positions = columnas(pdf.page_no())
+                y_actual = [y_arranque(pdf)] * COLS
+                y_inicio = [y_arranque(pdf)] * COLS
+            else:
+                # Empieza a media página; la página siguiente ya será "(cont.)".
+                pdf.provincia_continuacion = True
+                y_actual = [y_hoteles] * COLS
+                y_inicio = [y_hoteles] * COLS
             if provincia not in prov_pages:
                 prov_pages[provincia] = pdf.page_no()
             if isla and (provincia, isla) not in isla_pages:
@@ -1294,9 +1465,10 @@ def render_catalogo(pdf):
 
         if y_actual[current_col] + altura_total_requerida > Y_LIMIT:
             # La columna se cierra por estar llena: aquí sí se justifica.
-            volcar_columna(current_col, completa=True)
+            completa[current_col] = True
             current_col += 1
             if current_col >= COLS:
+                volcar_pagina()
                 pdf.provincia_continuacion = True
                 if not hay_cambio_localidad:
                     localidad_cont = True
@@ -1343,7 +1515,7 @@ def render_catalogo(pdf):
         y_actual[current_col] += item["alto"] + SEP_HOTELES
 
     # La última columna del catálogo queda a medias: sin justificar.
-    volcar_columna(current_col, completa=False)
+    volcar_pagina()
 
     pdf.isla_actual = ""
     return (prov_pages, isla_pages, hotel_pages, loc_pages,
